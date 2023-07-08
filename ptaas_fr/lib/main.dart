@@ -5,10 +5,11 @@ import 'package:flutter/material.dart';
 import 'package:models/models.dart';
 
 void main() {
-  String generalResponse =
-      '{"success":false,"data":null,"error":{"code":"500","message":"Internal Server Error"}}';
-  GeneralResponse response = GeneralResponse.deserialize(
-      BincodeDeserializer(Uint8List.fromList(utf8.encode(generalResponse))));
+  String jsonResponse =
+      '{"data":null,"error":{"code":"CouldNotFindLocustProjects","message":"No locust projects found"}}';
+  AllLocustProjectsResponse response = AllLocustProjectsResponse.deserialize(
+      BincodeDeserializer(Uint8List.fromList(utf8.encode(jsonResponse))));
+
   print(response);
   runApp(const MainApp());
 }

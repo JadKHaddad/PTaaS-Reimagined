@@ -1,43 +1,58 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LocustProject {
-    pub name: String,
-    pub installed: bool,
+#[derive(Serialize, Deserialize, Debug)]
+pub struct APIResponse {
+    pub data: Option<APIResponseData>,
+    pub error: Option<APIResponseError>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LocustScript {
-    pub name: String,
-    pub content: String,
+#[derive(Serialize, Deserialize, Debug)]
+pub struct APIResponseData {
+    pub data: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GeneralResponse {
-    pub success: bool,
-    pub data: Option<DataResponse>,
-    pub error: Option<ErrorResponse>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-// We cannot use #[serde(untagged)] because serde-generate does not support it
-pub enum DataResponse {
-    LocustProjects(AllLocustProjects),
-    LocustScripts(AllLocustScripts),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ErrorResponse {
-    pub code: String,
+#[derive(Serialize, Deserialize, Debug)]
+pub struct APIResponseError {
+    pub code: APIResponseErrorCode,
     pub message: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AllLocustProjects {
-    pub names: Vec<LocustProject>,
+#[derive(Serialize, Deserialize, Debug)]
+pub enum APIResponseErrorCode {
+    APITokenMissing,
+    InvalidAPIToken,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AllLocustScripts {
-    pub names: Vec<LocustScript>,
+// ------------------------------
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct AllLocustProjectsResponse {
+    pub data: Option<AllLocustProjectsResponseData>,
+    pub error: Option<AllLocustProjectsResponseError>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct AllLocustProjectsResponseData {
+    pub data: Vec<LocustProject>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct AllLocustProjectsResponseError {
+    pub code: AllLocustProjectsResponseErrorCode,
+    pub message: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub enum AllLocustProjectsResponseErrorCode {
+    CouldNotFindLocustProjects,
+    TimeOut,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct LocustProject {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub created_at: String,
+    pub updated_at: String,
 }
