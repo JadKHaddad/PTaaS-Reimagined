@@ -30,6 +30,7 @@ fn main() {
     let all_projects_data = AllProjectsResponseData { projects };
 
     let api_response: APIResponse<_, ()> = APIResponse {
+        success: true,
         response_type: APIResponseType::AllProjectsResponse,
         data: Some(all_projects_data),
         error: None,
@@ -50,6 +51,7 @@ fn main() {
     };
 
     let api_error_response: APIResponse<(), _> = APIResponse {
+        success: false,
         response_type: APIResponseType::AllProjectsResponse,
         data: None,
         error: Some(error),
@@ -70,6 +72,7 @@ fn main() {
     };
 
     let api_error_response: APIResponse<(), _> = APIResponse {
+        success: false,
         response_type: APIResponseType::GerneralResponse,
         data: None,
         error: Some(error),

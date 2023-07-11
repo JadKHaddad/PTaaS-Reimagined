@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 /// APIResponse is a generic struct that can be used to return data or an error
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct APIResponse<D, E> {
+    pub success: bool,
     pub response_type: APIResponseType,
     /// If data is not None, then the request was successful
     pub data: Option<D>,

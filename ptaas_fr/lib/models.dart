@@ -2,129 +2,29 @@ import 'package:flutter/foundation.dart';
 import 'package:json_annotation/json_annotation.dart';
 part 'models.g.dart';
 
-enum APIResponseType {
-  @JsonValue('GeneralResponse')
-  generalResponse,
-  @JsonValue('AllProjectsResponse')
-  allProjectsResponse,
-  @JsonValue('AllScriptsResponse')
-  allScriptsResponse,
-}
-
-enum APIGeneralResponseErrorType {
-  @JsonValue('APIKeyIsMissing')
-  apiKeyIsMissing,
-  @JsonValue('APIKeyIsInvalid')
-  apiKeyIsInvalid,
-}
-
-@JsonSerializable(fieldRename: FieldRename.snake)
-class APIResponse<D, E> {
-  APIResponseType responseType;
-  @JsonKey(fromJson: _dataFromJson, toJson: _dataToJson)
-  D? data;
-  @JsonKey(fromJson: APIResponseError.fromJson, toJson: APIResponseError.toJson)
-  APIResponseError<E>? error;
-
-  APIResponse({
-    required this.responseType,
-    this.data,
-    this.error,
-  });
-
-  static D? _dataFromJson<D>(dynamic json) {
-    if (json == null) {
-      return null;
-    }
-    return json as D;
-  }
-
-  static dynamic _dataToJson<D>(D? data) => data;
-}
-
-@JsonSerializable(fieldRename: FieldRename.snake)
-class APIResponseError<E> {
-  @JsonKey(fromJson: _errorTypeFromJson, toJson: _errorTypeToJson)
-  E errorType;
-  String errorMessage;
-
-  APIResponseError({
-    required this.errorType,
-    required this.errorMessage,
-  });
-
-  static APIResponseError<E>? fromJson<E>(Map<String, dynamic> json) {
-    try {
-      return APIResponseError<E>(
-        errorType: json['error_type'] as E,
-        errorMessage: json['error_message'] as String,
-      );
-    } catch (e) {
-      return null;
-    }
-  }
-
-  static Map<String, dynamic> toJson<E>(APIResponseError<E>? instance) =>
-      <String, dynamic>{
-        'error_type': instance!.errorType,
-        'error_message': instance.errorMessage,
-      };
-
-  static E _errorTypeFromJson<E>(dynamic json) {
-    if (json == null) {
-      return null as E;
-    }
-    return json as E;
-  }
-
-  static dynamic _errorTypeToJson<E>(E errorType) => errorType;
-}
-
-@JsonSerializable(fieldRename: FieldRename.snake)
+@JsonSerializable(explicitToJson: true)
 class Project {
-  String id;
-  bool installed;
-  List<Script> scripts;
+  final String id;
+  final bool installed;
+  final List<Script> scripts;
 
-  Project({
-    required this.id,
-    required this.installed,
-    required this.scripts,
-  });
+  Project({required this.id, required this.installed, required this.scripts});
+
+  factory Project.fromJson(Map<String, dynamic> json) =>
+      _$ProjectFromJson(json);
+
+  Map<String, dynamic> toJson() => _$ProjectToJson(this);
 }
 
-@JsonSerializable(fieldRename: FieldRename.snake)
+@JsonSerializable(explicitToJson: true)
 class Script {
-  String id;
+  final String id;
 
-  Script({
-    required this.id,
-  });
-}
+  Script({required this.id});
 
-@JsonSerializable(fieldRename: FieldRename.snake)
-class AllProjectsResponseData {
-  List<Project> projects;
+  factory Script.fromJson(Map<String, dynamic> json) => _$ScriptFromJson(json);
 
-  AllProjectsResponseData({
-    required this.projects,
-  });
-}
-
-enum AllProjectsResponseErrorType {
-  @JsonValue('CantReadProjects')
-  cantReadProjects,
-  @JsonValue('AProjectIsMissing')
-  aProjectIsMissing,
-}
-
-@JsonSerializable(fieldRename: FieldRename.snake)
-class AllScriptsResponseData {
-  List<Script> scripts;
-
-  AllScriptsResponseData({
-    required this.scripts,
-  });
+  Map<String, dynamic> toJson() => _$ScriptToJson(this);
 }
 
 enum AllScriptsResponseErrorType {
@@ -134,4 +34,95 @@ enum AllScriptsResponseErrorType {
   aScriptIsMissing,
   @JsonValue('CorrespondingProjectIsMissing')
   correspondingProjectIsMissing,
+}
+
+@JsonSerializable(explicitToJson: true)
+class AllScriptsResponse {
+  final List<Script> scripts;
+
+  AllScriptsResponse({required this.scripts});
+
+  factory AllScriptsResponse.fromJson(Map<String, dynamic> json) =>
+      _$AllScriptsResponseFromJson(json);
+
+  Map<String, dynamic> toJson() => _$AllScriptsResponseToJson(this);
+}
+
+enum AllProjectsResponseErrorType {
+  @JsonValue('CantReadProjects')
+  cantReadProjects,
+  @JsonValue('AProjectIsMissing')
+  aProjectIsMissing
+}
+
+@JsonSerializable(explicitToJson: true)
+class AllProjectsResponseData {
+  final List<Project> projects;
+
+  AllProjectsResponseData({required this.projects});
+
+  factory AllProjectsResponseData.fromJson(Map<String, dynamic> json) =>
+      _$AllProjectsResponseDataFromJson(json);
+
+  Map<String, dynamic> toJson() => _$AllProjectsResponseDataToJson(this);
+}
+
+enum APIGerneralResponseErrorType {
+  @JsonValue('APIKeyIsMissing')
+  apiKeyIsMissing,
+  @JsonValue('APIKeyIsInvalid')
+  apiKeyIsInvalid,
+}
+
+enum APIResponseType {
+  @JsonValue('GerneralResponse')
+  gerneralResponse,
+  @JsonValue('AllProjectsResponse')
+  allProjectsResponse,
+  @JsonValue('AllScriptsResponse')
+  allScriptsResponse,
+}
+
+// TODO: can use enums for error types instead of generics
+@JsonSerializable(explicitToJson: true, genericArgumentFactories: true)
+class APIResponseError<E> {
+  @JsonKey(name: 'error_type')
+  final E errorType;
+
+  @JsonKey(name: 'error_message')
+  final String errorMessage;
+
+  APIResponseError({required this.errorType, required this.errorMessage});
+
+  factory APIResponseError.fromJson(
+          Map<String, dynamic> json, E Function(Object? json) fromJsonE) =>
+      _$APIResponseErrorFromJson<E>(json, fromJsonE);
+
+  Map<String, dynamic> toJson(Object Function(E) toJsonE) =>
+      _$APIResponseErrorToJson<E>(this, toJsonE);
+}
+
+@JsonSerializable(explicitToJson: true, genericArgumentFactories: true)
+class APIResponse<D, E> {
+  final bool success;
+  @JsonKey(name: 'response_type')
+  final APIResponseType responseType;
+  final D? data;
+  final APIResponseError<E>? error;
+
+  APIResponse(
+      {required this.success,
+      required this.responseType,
+      required this.data,
+      required this.error});
+
+  factory APIResponse.fromJson(
+          Map<String, dynamic> json,
+          D Function(Object? json) fromJsonD,
+          E Function(Object? json) fromJsonE) =>
+      _$APIResponseFromJson<D, E>(json, fromJsonD, fromJsonE);
+
+  Map<String, dynamic> toJson(
+          Object Function(D) toJsonD, Object Function(E) toJsonE) =>
+      _$APIResponseToJson<D, E>(this, toJsonD, toJsonE);
 }
