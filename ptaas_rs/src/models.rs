@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 /// APIResponse is a generic struct that can be used to return data or an error
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct APIResponse<D, E> {
     pub success: bool,
     pub response_type: APIResponseType,
@@ -12,6 +13,7 @@ pub struct APIResponse<D, E> {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct APIResponseError<E> {
     /// Every endpoint should have its own error types
     pub error_type: E,
@@ -19,6 +21,7 @@ pub struct APIResponseError<E> {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub enum APIResponseType {
     /// GereralResponse is a generic response that indicates a failure before processing the request
     GerneralResponse,
@@ -27,6 +30,7 @@ pub enum APIResponseType {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub enum APIGerneralResponseErrorType {
     APIKeyIsMissing,
     APIKeyIsInvalid,
@@ -35,6 +39,7 @@ pub enum APIGerneralResponseErrorType {
 // -----------------
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct Project {
     pub id: String,
     pub installed: bool,
@@ -42,6 +47,7 @@ pub struct Project {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct Script {
     pub id: String,
 }
@@ -49,22 +55,26 @@ pub struct Script {
 // -----------------
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct AllProjectsResponseData {
     pub projects: Vec<Project>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub enum AllProjectsResponseErrorType {
     CantReadProjects,
     AProjectIsMissing,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct AllScriptsResponseData {
     pub scripts: Vec<Script>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub enum AllScriptsResponseErrorType {
     CantReadScripts,
     AScriptIsMissing,
