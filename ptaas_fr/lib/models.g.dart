@@ -118,3 +118,20 @@ Object? _$nullableGenericToJson<T>(
   Object? Function(T value) toJson,
 ) =>
     input == null ? null : toJson(input);
+
+const _$AllScriptsResponseErrorTypeEnumMap = {
+  AllScriptsResponseErrorType.cantReadScripts: 'cantReadScripts',
+  AllScriptsResponseErrorType.aScriptIsMissing: 'aScriptIsMissing',
+  AllScriptsResponseErrorType.correspondingProjectIsMissing:
+      'correspondingProjectIsMissing',
+};
+
+const _$AllProjectsResponseErrorTypeEnumMap = {
+  AllProjectsResponseErrorType.cantReadProjects: 'cantReadProjects',
+  AllProjectsResponseErrorType.aProjectIsMissing: 'aProjectIsMissing',
+};
+
+const _$APIGerneralResponseErrorTypeEnumMap = {
+  APIGerneralResponseErrorType.aPIKeyIsMissing: 'aPIKeyIsMissing',
+  APIGerneralResponseErrorType.aPIKeyIsInvalid: 'aPIKeyIsInvalid',
+};

@@ -28,10 +28,15 @@ class Script {
   Map<String, dynamic> toJson() => _$ScriptToJson(this);
 }
 
+@JsonEnum(alwaysCreate: true)
 enum AllScriptsResponseErrorType {
   cantReadScripts,
   aScriptIsMissing,
-  correspondingProjectIsMissing,
+  correspondingProjectIsMissing;
+
+  static AllScriptsResponseErrorType fromString(String value) {
+    return $enumDecode(_$AllScriptsResponseErrorTypeEnumMap, value);
+  }
 }
 
 @JsonSerializable()
@@ -46,7 +51,15 @@ class AllScriptsResponse {
   Map<String, dynamic> toJson() => _$AllScriptsResponseToJson(this);
 }
 
-enum AllProjectsResponseErrorType { cantReadProjects, aProjectIsMissing }
+@JsonEnum(alwaysCreate: true)
+enum AllProjectsResponseErrorType {
+  cantReadProjects,
+  aProjectIsMissing;
+
+  static AllProjectsResponseErrorType fromString(String value) {
+    return $enumDecode(_$AllProjectsResponseErrorTypeEnumMap, value);
+  }
+}
 
 @JsonSerializable()
 class AllProjectsResponseData {
@@ -60,15 +73,25 @@ class AllProjectsResponseData {
   Map<String, dynamic> toJson() => _$AllProjectsResponseDataToJson(this);
 }
 
+@JsonEnum(alwaysCreate: true)
 enum APIGerneralResponseErrorType {
-  apiKeyIsMissing,
-  apiKeyIsInvalid,
+  aPIKeyIsMissing,
+  aPIKeyIsInvalid;
+
+  factory APIGerneralResponseErrorType.fromString(String value) {
+    return $enumDecode(_$APIGerneralResponseErrorTypeEnumMap, value);
+  }
 }
 
+@JsonEnum(alwaysCreate: true)
 enum APIResponseType {
   gerneralResponse,
   allProjectsResponse,
-  allScriptsResponse,
+  allScriptsResponse;
+
+  factory APIResponseType.fromString(String value) {
+    return $enumDecode(_$APIResponseTypeEnumMap, value);
+  }
 }
 
 @JsonSerializable(genericArgumentFactories: true)
