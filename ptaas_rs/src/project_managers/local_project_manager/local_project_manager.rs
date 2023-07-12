@@ -7,7 +7,7 @@ pub struct LocalProjectManager {
 
 #[derive(ThisError, Debug)]
 pub enum LocalProjectManagerCreateError {
-    #[error("Could check if root dir exists: {0}")]
+    #[error("Could not check if root dir exists: {0}")]
     CouldNotCheckIfRootDirExists(#[source] std::io::Error),
     #[error("Could not create root dir: {0}")]
     CouldNotCreateRootDir(#[source] std::io::Error),
