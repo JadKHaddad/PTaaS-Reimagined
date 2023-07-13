@@ -20,6 +20,7 @@ pub struct Process {
     child: Child,
     status: Status,
     child_awaited: bool,
+    child_killed: bool,
     kill_on_drop: bool,
 }
 
@@ -67,6 +68,7 @@ impl Process {
             child,
             status: Status::Running,
             child_awaited: false,
+            child_killed: false,
             kill_on_drop,
         })
     }
@@ -83,6 +85,10 @@ impl Process {
         self.child
             .kill()
             .await
+            .and_then(|_| {
+                self.child_killed = true;
+                Ok(())
+            })
             .map_err(|error| ProcessKillAndWaitError::CouldNotKillProcess(error))?;
 
         self.child
@@ -141,11 +147,11 @@ impl Process {
 
 impl Drop for Process {
     fn drop(&mut self) {
-        if let Status::Running = self.status {
-            tracing::warn!(id = self.id(), "Process was not explicitly killed.");
+        if !self.child_killed {
+            tracing::warn!(id = self.id(), "Process was not explicitly killed");
 
             if self.kill_on_drop {
-                tracing::warn!(id = self.id(), "Sending kill signal to process.");
+                tracing::warn!(id = self.id(), "Sending kill signal to process");
             }
         }
 

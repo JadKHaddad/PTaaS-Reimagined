@@ -1,5 +1,5 @@
 $i = 1
-while ($true) {
+while ($i -le 5) {
     Write-Host $i
     $i++
     Start-Sleep -Seconds 1

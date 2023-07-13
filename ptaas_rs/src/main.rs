@@ -31,15 +31,16 @@ async fn main() {
             let reader = io::BufReader::new(stdout);
             let mut lines = reader.lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                file.write_all(line.as_bytes()).await.unwrap();
-                file.write_all(b"\n").await.unwrap();
+                println!("{}", line);
+                //file.write_all(line.as_bytes()).await.unwrap();
+                //file.write_all(b"\n").await.unwrap();
             }
         }
     });
 
-    tokio::time::sleep(Duration::from_secs(5)).await;
+    tokio::time::sleep(Duration::from_secs(10)).await;
     //p.status().await.unwrap();
-    p.kill_and_wait().await.unwrap();
+    //p.kill_and_wait().await.unwrap();
 
     print_dummies();
     if std::env::var_os("RUST_LOG").is_none() {
