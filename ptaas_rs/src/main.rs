@@ -1,8 +1,45 @@
-use ptaas_rs::{models_2::print_dummies, project_managers::LocalProjectManager};
+use std::{process::Stdio, time::Duration};
+
+use ptaas_rs::{
+    models_2::print_dummies,
+    project_managers::{LocalProjectManager, Process},
+};
+use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() {
+    let mut p = Process::new(
+        "powershell.exe",
+        vec!["./numbers.ps1"],
+        ".",
+        Stdio::inherit(),
+        Stdio::piped(),
+        Stdio::inherit(),
+    )
+    .await
+    .unwrap();
+
+    let stdout = p.stdout();
+
+    // Create a file to write the lines
+    let mut file = tokio::fs::File::create("output.txt").await.unwrap();
+
+    tokio::spawn(async move {
+        if let Some(stdout) = stdout {
+            let reader = io::BufReader::new(stdout);
+            let mut lines = reader.lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                file.write_all(line.as_bytes()).await.unwrap();
+                file.write_all(b"\n").await.unwrap();
+            }
+        }
+    });
+
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    p.status().await.unwrap();
+    p.kill_and_wait().await.unwrap();
+
     print_dummies();
     if std::env::var_os("RUST_LOG").is_none() {
         std::env::set_var("RUST_LOG", "ptaas_rs=trace,tower_http=off,hyper=off");

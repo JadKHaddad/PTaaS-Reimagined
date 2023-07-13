@@ -5,7 +5,7 @@ use std::{
 };
 
 use thiserror::Error as ThisError;
-use tokio::process::{Child, Command};
+use tokio::process::{Child, ChildStderr, ChildStdout, Command};
 
 #[derive(Debug, Clone)]
 pub enum Status {
@@ -65,6 +65,14 @@ impl Process {
             status: Status::Running,
             child_awaited: false,
         })
+    }
+
+    pub fn stdout(&mut self) -> Option<ChildStdout> {
+        self.child.stdout.take()
+    }
+
+    pub fn stderr(&mut self) -> Option<ChildStderr> {
+        self.child.stderr.take()
     }
 
     pub async fn kill_and_wait(mut self) -> Result<(), ProcessKillAndWaitError> {
