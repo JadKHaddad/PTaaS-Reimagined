@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 
 import 'models.dart';
+import 'msg.dart';
 
 void main() {
   runApp(const MainApp());
@@ -44,14 +45,39 @@ class MainApp extends StatelessWidget {
     }
   }
 
+  void _doOtherAPIStuff() {
+    String wsMessage = '{"Subscribe":{"project_id":"project1"}}';
+    // we already know the type of the message 'WSFromClient', so we can just parse it as such
+    Map<String, dynamic> json = jsonDecode(wsMessage);
+    WSFromClient fromClient = WSFromClient.fromJson(json);
+    print("WS message: $fromClient");
+    print("sub: ${fromClient.subscribe}, unsub: ${fromClient.unsubscribe}");
+    // is this a subscribe message? or something else?
+    if (fromClient.subscribe != null) {
+      print("Subscribe message: ${fromClient.subscribe}");
+    }
+
+    // is this a unsubscribe message? or something else?
+    if (fromClient.unsubscribe != null) {
+      print("Unsubscribe message: ${fromClient.unsubscribe}");
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       home: Scaffold(
         body: Center(
-            child: TextButton(
+            child: Column(
+          children: [
+            TextButton(
                 onPressed: _doSomeAPIStuff,
-                child: const Text("Do some API stuff"))),
+                child: const Text("Do some API stuff")),
+            TextButton(
+                onPressed: _doOtherAPIStuff,
+                child: const Text("Do other API stuff")),
+          ],
+        )),
       ),
     );
   }
