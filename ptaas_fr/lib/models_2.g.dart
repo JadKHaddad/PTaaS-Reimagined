@@ -6,41 +6,66 @@ part of 'models_2.dart';
 // JsonSerializableGenerator
 // **************************************************************************
 
-APIResponse<T> _$APIResponseFromJson<T>(
-  Map<String, dynamic> json,
-  T Function(Object? json) fromJsonT,
-) =>
-    APIResponse<T>(
-      processed: _$nullableGenericFromJson(json['processed'], fromJsonT),
-      missingToken: json['missingToken'] as bool?,
-      emptyToken: json['emptyToken'] as bool?,
-      notLoggedIn: json['notLoggedIn'] as bool?,
-      internalServerError: json['internalServerError'] as bool?,
+Project _$ProjectFromJson(Map<String, dynamic> json) => Project(
+      id: json['id'] as String,
+      installed: json['installed'] as bool,
+      scripts: (json['scripts'] as List<dynamic>)
+          .map((e) => Script.fromJson(e as Map<String, dynamic>))
+          .toList(),
     );
 
-Map<String, dynamic> _$APIResponseToJson<T>(
-  APIResponse<T> instance,
-  Object? Function(T value) toJsonT,
-) =>
-    <String, dynamic>{
-      'processed': _$nullableGenericToJson(instance.processed, toJsonT),
-      'missingToken': instance.missingToken,
-      'emptyToken': instance.emptyToken,
-      'notLoggedIn': instance.notLoggedIn,
-      'internalServerError': instance.internalServerError,
+Map<String, dynamic> _$ProjectToJson(Project instance) => <String, dynamic>{
+      'id': instance.id,
+      'installed': instance.installed,
+      'scripts': instance.scripts,
     };
 
-T? _$nullableGenericFromJson<T>(
-  Object? input,
-  T Function(Object? json) fromJson,
-) =>
-    input == null ? null : fromJson(input);
+Script _$ScriptFromJson(Map<String, dynamic> json) => Script(
+      id: json['id'] as String,
+    );
 
-Object? _$nullableGenericToJson<T>(
-  T? input,
-  Object? Function(T value) toJson,
-) =>
-    input == null ? null : toJson(input);
+Map<String, dynamic> _$ScriptToJson(Script instance) => <String, dynamic>{
+      'id': instance.id,
+    };
+
+APIResponse _$APIResponseFromJson(Map<String, dynamic> json) => APIResponse(
+      processed: json['processed'] == null
+          ? null
+          : APIResponseProcessd.fromJson(
+              json['processed'] as Map<String, dynamic>),
+      failed: $enumDecodeNullable(_$APIResponseFailedEnumMap, json['failed']),
+    );
+
+Map<String, dynamic> _$APIResponseToJson(APIResponse instance) =>
+    <String, dynamic>{
+      'processed': instance.processed,
+      'failed': _$APIResponseFailedEnumMap[instance.failed],
+    };
+
+const _$APIResponseFailedEnumMap = {
+  APIResponseFailed.missingToken: 'missingToken',
+  APIResponseFailed.enmtptyToken: 'enmtptyToken',
+  APIResponseFailed.notLoggedIn: 'notLoggedIn',
+  APIResponseFailed.internalServerError: 'internalServerError',
+};
+
+APIResponseProcessd _$APIResponseProcessdFromJson(Map<String, dynamic> json) =>
+    APIResponseProcessd()
+      ..allProjects = json['allProjects'] == null
+          ? null
+          : AllProjectsResponse.fromJson(
+              json['allProjects'] as Map<String, dynamic>)
+      ..allScripts = json['allScripts'] == null
+          ? null
+          : AllScriptsResponse.fromJson(
+              json['allScripts'] as Map<String, dynamic>);
+
+Map<String, dynamic> _$APIResponseProcessdToJson(
+        APIResponseProcessd instance) =>
+    <String, dynamic>{
+      'allProjects': instance.allProjects,
+      'allScripts': instance.allScripts,
+    };
 
 AllProjectsResponse _$AllProjectsResponseFromJson(Map<String, dynamic> json) =>
     AllProjectsResponse(
@@ -48,17 +73,21 @@ AllProjectsResponse _$AllProjectsResponseFromJson(Map<String, dynamic> json) =>
           ? null
           : AllProjectsResponseProcessed.fromJson(
               json['processed'] as Map<String, dynamic>),
-      cantReadProjects: json['cantReadProjects'] as bool?,
-      aProjectIsMissing: json['aProjectIsMissing'] as bool?,
+      failed: $enumDecodeNullable(
+          _$AllProjectsResponseFailedEnumMap, json['failed']),
     );
 
 Map<String, dynamic> _$AllProjectsResponseToJson(
         AllProjectsResponse instance) =>
     <String, dynamic>{
       'processed': instance.processed,
-      'cantReadProjects': instance.cantReadProjects,
-      'aProjectIsMissing': instance.aProjectIsMissing,
+      'failed': _$AllProjectsResponseFailedEnumMap[instance.failed],
     };
+
+const _$AllProjectsResponseFailedEnumMap = {
+  AllProjectsResponseFailed.cantReadProjects: 'cantReadProjects',
+  AllProjectsResponseFailed.aProjectIsMissing: 'aProjectIsMissing',
+};
 
 AllProjectsResponseProcessed _$AllProjectsResponseProcessedFromJson(
         Map<String, dynamic> json) =>
@@ -74,24 +103,37 @@ Map<String, dynamic> _$AllProjectsResponseProcessedToJson(
       'projects': instance.projects,
     };
 
-Script _$ScriptFromJson(Map<String, dynamic> json) => Script(
-      id: json['id'] as String,
+AllScriptsResponse _$AllScriptsResponseFromJson(Map<String, dynamic> json) =>
+    AllScriptsResponse(
+      processed: json['processed'] == null
+          ? null
+          : AllScriptsResponseProcessed.fromJson(
+              json['processed'] as Map<String, dynamic>),
+      failed: $enumDecodeNullable(
+          _$AllScriptsResponseFailedEnumMap, json['failed']),
     );
 
-Map<String, dynamic> _$ScriptToJson(Script instance) => <String, dynamic>{
-      'id': instance.id,
+Map<String, dynamic> _$AllScriptsResponseToJson(AllScriptsResponse instance) =>
+    <String, dynamic>{
+      'processed': instance.processed,
+      'failed': _$AllScriptsResponseFailedEnumMap[instance.failed],
     };
 
-Project _$ProjectFromJson(Map<String, dynamic> json) => Project(
-      id: json['id'] as String,
-      installed: json['installed'] as bool,
+const _$AllScriptsResponseFailedEnumMap = {
+  AllScriptsResponseFailed.cantReadScripts: 'cantReadScripts',
+  AllScriptsResponseFailed.aScriptIsMissing: 'aScriptIsMissing',
+};
+
+AllScriptsResponseProcessed _$AllScriptsResponseProcessedFromJson(
+        Map<String, dynamic> json) =>
+    AllScriptsResponseProcessed(
       scripts: (json['scripts'] as List<dynamic>)
           .map((e) => Script.fromJson(e as Map<String, dynamic>))
           .toList(),
     );
 
-Map<String, dynamic> _$ProjectToJson(Project instance) => <String, dynamic>{
-      'id': instance.id,
-      'installed': instance.installed,
+Map<String, dynamic> _$AllScriptsResponseProcessedToJson(
+        AllScriptsResponseProcessed instance) =>
+    <String, dynamic>{
       'scripts': instance.scripts,
     };
