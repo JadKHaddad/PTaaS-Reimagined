@@ -20,6 +20,7 @@ pub struct Process {
     child: Child,
     status: Status,
     child_awaited: bool,
+    kill_on_drop: bool,
 }
 
 #[derive(ThisError, Debug)]
@@ -44,6 +45,7 @@ impl Process {
         stdin: T,
         stdout: T,
         stderr: T,
+        kill_on_drop: bool,
     ) -> Result<Self, ProcessCreateError>
     where
         I: IntoIterator<Item = S>,
@@ -57,6 +59,7 @@ impl Process {
             .stdin(stdin)
             .stdout(stdout)
             .stderr(stderr)
+            .kill_on_drop(kill_on_drop)
             .spawn()
             .map_err(|e| ProcessCreateError::CouldNotCreateProcess(e))?;
 
@@ -64,6 +67,7 @@ impl Process {
             child,
             status: Status::Running,
             child_awaited: false,
+            kill_on_drop,
         })
     }
 
@@ -93,10 +97,7 @@ impl Process {
 
     /// Maybe useful if 'kill_and_wait' fails with 'CouldNotKillProcess' error
     pub fn start_kill(&mut self) -> Result<(), std::io::Error> {
-        tracing::warn!(
-            id = self.id(),
-            "Sending kill signal to process. Not awaited processes may cause zombie processes"
-        );
+        tracing::warn!(id = self.id(), "Sending kill signal to process.");
         self.child.start_kill()
     }
 
@@ -140,6 +141,14 @@ impl Process {
 
 impl Drop for Process {
     fn drop(&mut self) {
+        if let Status::Running = self.status {
+            tracing::warn!(id = self.id(), "Process was not explicitly killed.");
+
+            if self.kill_on_drop {
+                tracing::warn!(id = self.id(), "Sending kill signal to process.");
+            }
+        }
+
         if !self.child_awaited {
             tracing::warn!(id = self.id(), "Process was dropped without being awaited. Not awaited processes may cause zombie processes");
         }

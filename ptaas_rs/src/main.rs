@@ -16,6 +16,7 @@ async fn main() {
         Stdio::inherit(),
         Stdio::piped(),
         Stdio::inherit(),
+        true,
     )
     .await
     .unwrap();
@@ -37,7 +38,7 @@ async fn main() {
     });
 
     tokio::time::sleep(Duration::from_secs(5)).await;
-    p.status().await.unwrap();
+    //p.status().await.unwrap();
     p.kill_and_wait().await.unwrap();
 
     print_dummies();
