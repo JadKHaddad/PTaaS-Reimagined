@@ -12,7 +12,7 @@ pub enum Status {
     Running,
     TerminatedSuccessfully,
     TerminatedWithError(i32),
-    Unknown,
+    TerminatedWithUnknownError,
 }
 
 #[derive(Debug)]
@@ -103,7 +103,7 @@ impl Process {
                     tracing::debug!(id = self.id(), code, "Process terminated with error");
                 }
                 None => {
-                    self.status = Status::Unknown;
+                    self.status = Status::TerminatedWithUnknownError;
                     tracing::debug!(id = self.id(), "Process terminated with unknown error");
                 }
             }
