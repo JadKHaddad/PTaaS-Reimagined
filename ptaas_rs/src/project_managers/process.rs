@@ -81,6 +81,7 @@ impl Process {
         self.child.stderr.take()
     }
 
+    /// Kill may fail if the process has already exited
     pub async fn kill_and_wait(mut self) -> Result<(), ProcessKillAndWaitError> {
         self.child
             .kill()
@@ -148,10 +149,16 @@ impl Process {
 impl Drop for Process {
     fn drop(&mut self) {
         if !self.child_killed {
-            tracing::warn!(id = self.id(), "Process was not explicitly killed");
+            // the status was not checked or the process could not be awaited due to an error
+            if let Status::Running = self.status {
+                tracing::warn!(
+                    id = self.id(),
+                    "Process was not explicitly killed and the status was not or could not be checked"
+                );
 
-            if self.kill_on_drop {
-                tracing::warn!(id = self.id(), "Sending kill signal to process");
+                if self.kill_on_drop {
+                    tracing::warn!(id = self.id(), "Sending kill signal to process");
+                }
             }
         }
 

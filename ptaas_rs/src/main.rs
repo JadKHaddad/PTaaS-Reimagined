@@ -2,7 +2,7 @@ use std::{process::Stdio, time::Duration};
 
 use ptaas_rs::{
     models_2::print_dummies,
-    project_managers::{LocalProjectManager, Process},
+    project_managers::{process::Status, LocalProjectManager, Process},
 };
 use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt};
 use tracing_subscriber::EnvFilter;
@@ -38,9 +38,16 @@ async fn main() {
         }
     });
 
-    tokio::time::sleep(Duration::from_secs(10)).await;
-    //p.status().await.unwrap();
-    //p.kill_and_wait().await.unwrap();
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    match p.status().await.unwrap() {
+        Status::Running => {
+            println!("Process is still running, killing it");
+            p.kill_and_wait().await.unwrap();
+        }
+        _ => {
+            println!("Process is not running");
+        }
+    }
 
     print_dummies();
     if std::env::var_os("RUST_LOG").is_none() {
