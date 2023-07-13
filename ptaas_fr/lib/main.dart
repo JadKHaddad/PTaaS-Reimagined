@@ -1,9 +1,6 @@
 import 'dart:convert';
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
-
-import 'models.dart';
+import 'models_2.dart';
 import 'msg.dart';
 
 void main() {
@@ -14,38 +11,52 @@ class MainApp extends StatelessWidget {
   const MainApp({super.key});
 
   void _doSomeAPIStuff() {
-    String allProjectsResponseSuccessString =
-        '{"success":true,"responseType":"allProjectsResponse","data":{"projects":[{"id":"project1","installed":true,"scripts":[{"id":"script1"},{"id":"script2"}]},{"id":"project2","installed":false,"scripts":[{"id":"script3"}]}]},"error":null}';
-    String allProjectsResponseErrorString =
-        '{"success":false,"responseType":"allProjectsResponse","data":null,"error":{"errorType":"cantReadProjects","errorMessage":"Failed to read projects."}}';
-    String apiErrorResponseString =
-        '{"success":false,"responseType":"gerneralResponse","data":null,"error":{"errorType":"aPIKeyIsMissing","errorMessage":"API key is missing."}}';
+    String apiFailed = '{"failed":"missingToken"}';
+    String allProj =
+        '{"processed":{"allProjects":{"processed":{"projects":[{"id":"id","installed":true,"scripts":[{"id":"id"}]}]}}}}';
+    String allProjFailed =
+        '{"processed":{"allProjects":{"failed":"aProjectIsMissing"}}}';
+    String allScripts =
+        '{"processed":{"allScripts":{"processed":{"scripts":[{"id":"id"}]}}}}';
+    String allScriptsFailed =
+        '{"processed":{"allScripts":{"failed":"aScriptIsMissing"}}}';
 
-    Map<String, dynamic> json = jsonDecode(apiErrorResponseString);
+    Map<String, dynamic> jsonApiFailed = jsonDecode(apiFailed);
 
-    try {
-      // if this one fails, the error is in an api error so we parse it as such
-      APIResponse<AllProjectsResponseData?, AllProjectsResponseErrorType?>
-          allProjectsResponse = APIResponse.fromJson(
-              json,
-              (json) => AllProjectsResponseData.fromJson(
-                  json as Map<String, dynamic>),
-              (json) =>
-                  AllProjectsResponseErrorType.fromString(json as String));
-      print("All projects response: $json");
-    } catch (e) {
-      APIResponse<Object?, APIGerneralResponseErrorType?> apiErrorResponse =
-          APIResponse.fromJson(
-              json,
-              (json) =>
-                  null /* we don't care about the data because its never there!*/,
-              (json) =>
-                  APIGerneralResponseErrorType.fromString(json as String));
-      print("API error response: $json");
+    Map<String, dynamic> jsonAllProj = jsonDecode(allProj);
+    Map<String, dynamic> jsonAllProjFailed = jsonDecode(allProjFailed);
+
+    Map<String, dynamic> jsonAllScripts = jsonDecode(allScripts);
+    Map<String, dynamic> jsonAllScriptsFailed = jsonDecode(allScriptsFailed);
+
+    APIResponse apiResponse = APIResponse.fromJson(jsonApiFailed);
+    if (apiResponse.processed != null) {
+      print("API processed: \n");
+      if (apiResponse.processed!.allProjects != null) {
+        print("All Projects: ");
+        if (apiResponse.processed!.allProjects!.processed != null) {
+          print(
+              "All Projects Procced: ${apiResponse.processed!.allProjects!.processed}");
+        } else if (apiResponse.processed!.allProjects!.failed != null) {
+          print(
+              "All Projects Failed: ${apiResponse.processed!.allProjects!.failed}");
+        }
+      } else if (apiResponse.processed!.allScripts != null) {
+        print("All Scripts: ");
+        if (apiResponse.processed!.allScripts!.processed != null) {
+          print(
+              "All Scripts Procced: ${apiResponse.processed!.allScripts!.processed}");
+        } else if (apiResponse.processed!.allScripts!.failed != null) {
+          print(
+              "All Scripts Failed: ${apiResponse.processed!.allScripts!.failed}");
+        }
+      }
+    } else if (apiResponse.failed != null) {
+      print("API failed: ${apiResponse.failed}");
     }
   }
 
-  void _doOtherAPIStuff() {
+  void _doWSStuff() {
     String wsMessage = '{"Subscribe":{"project_id":"project1"}}';
     // we already know the type of the message 'WSFromClient', so we can just parse it as such
     Map<String, dynamic> json = jsonDecode(wsMessage);
@@ -73,9 +84,7 @@ class MainApp extends StatelessWidget {
             TextButton(
                 onPressed: _doSomeAPIStuff,
                 child: const Text("Do some API stuff")),
-            TextButton(
-                onPressed: _doOtherAPIStuff,
-                child: const Text("Do other API stuff")),
+            TextButton(onPressed: _doWSStuff, child: const Text("Do WS stuff")),
           ],
         )),
       ),

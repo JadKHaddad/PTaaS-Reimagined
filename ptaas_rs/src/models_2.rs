@@ -104,12 +104,16 @@ pub fn print_dummies() {
         AllProjectsResponse::Failed(AllProjectsResponseFailed::AProjectIsMissing),
     ));
 
-    let _all_scripts = APIResponse::Processed(APIResponseProcessd::AllScripts(
+    let all_scripts = APIResponse::Processed(APIResponseProcessd::AllScripts(
         AllScriptsResponse::Processed(AllScriptsResponseProcessed {
             scripts: vec![Script {
                 id: "id".to_string(),
             }],
         }),
+    ));
+
+    let all_scripts_failed = APIResponse::Processed(APIResponseProcessd::AllScripts(
+        AllScriptsResponse::Failed(AllScriptsResponseFailed::AScriptIsMissing),
     ));
 
     // print them with serde_json
@@ -122,5 +126,13 @@ pub fn print_dummies() {
     println!(
         "all_proj_failed:\n{}\n",
         serde_json::to_string(&all_proj_failed).unwrap()
+    );
+    println!(
+        "all_scripts:\n{}\n",
+        serde_json::to_string(&all_scripts).unwrap()
+    );
+    println!(
+        "all_scripts_failed:\n{}\n",
+        serde_json::to_string(&all_scripts_failed).unwrap()
     );
 }
