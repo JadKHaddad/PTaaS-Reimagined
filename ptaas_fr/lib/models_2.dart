@@ -59,7 +59,7 @@ class APIResponseProcessd {
 
 enum APIResponseFailed {
   missingToken,
-  enmtptyToken,
+  emptyToken,
   notLoggedIn,
   internalServerError,
 }

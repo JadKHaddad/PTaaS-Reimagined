@@ -44,7 +44,7 @@ Map<String, dynamic> _$APIResponseToJson(APIResponse instance) =>
 
 const _$APIResponseFailedEnumMap = {
   APIResponseFailed.missingToken: 'missingToken',
-  APIResponseFailed.enmtptyToken: 'enmtptyToken',
+  APIResponseFailed.emptyToken: 'emptyToken',
   APIResponseFailed.notLoggedIn: 'notLoggedIn',
   APIResponseFailed.internalServerError: 'internalServerError',
 };
