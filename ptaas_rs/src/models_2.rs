@@ -1,9 +1,11 @@
+use convertible_macros::DartConvertible;
 use serde::{Deserialize, Serialize};
 
 // Models
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, DartConvertible)]
 #[serde(rename_all = "camelCase")]
+#[dart_convertible(rename_all = "camelCase")]
 pub struct Project {
     pub id: String,
     pub installed: bool,
