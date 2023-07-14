@@ -3,10 +3,13 @@ use std::{
     io::{Error as IoError, ErrorKind},
     path::Path,
     process::{ExitStatus, Stdio},
+    time::Duration,
 };
 
 use thiserror::Error as ThisError;
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
+
+// TODO: id is lost when process is no longer running!. use a given id in the constructor.
 
 #[derive(Debug, Clone)]
 pub enum Status {
@@ -160,16 +163,16 @@ impl Process {
     fn set_status_on_ex_status(&mut self, ex_status: ExitStatus) -> &Status {
         if ex_status.success() {
             self.status = Status::TerminatedSuccessfully;
-            tracing::debug!(id = self.id(), "Process terminated successfully");
+            tracing::debug!(id = self.id(), "Process terminated successfully.");
         } else {
             match ex_status.code() {
                 Some(code) => {
                     self.status = Status::TerminatedWithError(code);
-                    tracing::debug!(id = self.id(), code, "Process terminated with error");
+                    tracing::debug!(id = self.id(), code, "Process terminated with error.");
                 }
                 None => {
                     self.status = Status::TerminatedWithUnknownError;
-                    tracing::debug!(id = self.id(), "Process terminated with unknown error");
+                    tracing::debug!(id = self.id(), "Process terminated with unknown error.");
                 }
             }
         }
@@ -191,9 +194,19 @@ impl Process {
         })
     }
 
-    /// Use only if you know your program will terminate!.
-    pub async fn wait_with_output(mut self) -> Result<Output, IoError> {
-        self.wait_and_set_status().await?;
+    pub async fn wait_with_timeout_and_output(
+        &mut self,
+        duration: Duration,
+    ) -> Result<Output, ProcessKillAndWaitError> {
+        tokio::select! {
+            _ = tokio::time::sleep(duration) => {
+                self.kill_and_wait_and_set_status().await?;
+                tracing::warn!(id = self.id(), "Process killed after timeout.");
+            }
+            _ = self.wait_and_set_status() => {
+                tracing::debug!(id = self.id(), "Process terminated before timeout.");
+            }
+        }
 
         Ok(Output {
             status: self.status.clone(),
@@ -224,9 +237,9 @@ impl Drop for Process {
     fn drop(&mut self) {
         if !self.child_terminated_and_awaited_successfuly {
             if !self.child_killed_successfuly && self.kill_on_drop {
-                tracing::warn!(id = self.id(), "Process was not explicitly killed and the status was not or could not be checked. Process may still be running. Sending kill signal to process");
+                tracing::warn!(id = self.id(), "Process was not explicitly killed and the status was not or could not be checked. Process may still be running. Sending kill signal to process.");
             }
-            tracing::warn!(id = self.id(), "Process was dropped without being awaited. Not awaited processes may cause zombie processes");
+            tracing::warn!(id = self.id(), "Process was dropped without being awaited. Not awaited processes may cause zombie processes.");
         }
     }
 }

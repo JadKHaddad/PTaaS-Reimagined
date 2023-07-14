@@ -9,6 +9,18 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() {
+    if std::env::var_os("RUST_LOG").is_none() {
+        std::env::set_var("RUST_LOG", "ptaas_rs=trace,tower_http=off,hyper=off");
+    }
+
+    tracing_subscriber::fmt()
+        .with_target(false)
+        .with_timer(tracing_subscriber::fmt::time::UtcTime::rfc_3339())
+        .with_level(true)
+        .with_ansi(true)
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
+
     match Process::program_exists(
         "powershells.exe",
         Stdio::null(),
@@ -29,20 +41,26 @@ async fn main() {
         }
     }
 
+    let mut p = Process::new(
+        "powershell.exe",
+        vec!["./numbers.ps1"],
+        ".",
+        Stdio::inherit(),
+        Stdio::inherit(),
+        Stdio::inherit(),
+        true,
+    )
+    .await
+    .unwrap();
+
+    match p.wait_with_timeout_and_output(Duration::from_secs(6)).await {
+        Ok(_) => {}
+        Err(error) => {
+            println!("Error: {}", error);
+        }
+    }
+
     std::process::exit(0);
-
-    // let mut p = Process::new(
-    //     "powershell.exe",
-    //     vec!["./numbers.ps1"],
-    //     ".",
-    //     Stdio::inherit(),
-    //     Stdio::piped(),
-    //     Stdio::inherit(),
-    //     true,
-    // )
-    // .await
-    // .unwrap();
-
     // let stdout = p.stdout();
 
     // // Create a file to write the lines
@@ -72,17 +90,6 @@ async fn main() {
     // }
 
     print_dummies();
-    if std::env::var_os("RUST_LOG").is_none() {
-        std::env::set_var("RUST_LOG", "ptaas_rs=trace,tower_http=off,hyper=off");
-    }
-
-    tracing_subscriber::fmt()
-        .with_target(false)
-        .with_timer(tracing_subscriber::fmt::time::UtcTime::rfc_3339())
-        .with_level(true)
-        .with_ansi(true)
-        .with_env_filter(EnvFilter::from_default_env())
-        .init();
 
     let basic_auth_username = std::env::var("BASIC_AUTH_USERNAME").unwrap_or_else(|_| {
         tracing::warn!("BASIC_AUTH_USERNAME not set, using default value");
