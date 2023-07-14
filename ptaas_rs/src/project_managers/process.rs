@@ -194,6 +194,8 @@ impl Process {
         })
     }
 
+    /// After calling this funtion `stdout()` and `stderr()` will return `None`.
+    /// If you want to use these values, use the returned `Output` instead.
     pub async fn wait_with_timeout_and_output(
         &mut self,
         duration: Duration,
