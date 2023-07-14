@@ -53,12 +53,15 @@ async fn main() {
     .await
     .unwrap();
 
-    match p.wait_with_timeout_and_output(Duration::from_secs(6)).await {
-        Ok(_) => {}
-        Err(error) => {
-            println!("Error: {}", error);
-        }
-    }
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    p.kill_and_wait_and_set_status().await.unwrap();
+
+    // match p.wait_with_timeout_and_output(Duration::from_secs(6)).await {
+    //     Ok(_) => {}
+    //     Err(error) => {
+    //         println!("Error: {}", error);
+    //     }
+    // }
 
     std::process::exit(0);
     // let stdout = p.stdout();
@@ -78,7 +81,6 @@ async fn main() {
     //     }
     // });
 
-    tokio::time::sleep(Duration::from_secs(3)).await;
     // match p.status().unwrap() {
     //     Status::Running => {
     //         println!("Process is still running");
