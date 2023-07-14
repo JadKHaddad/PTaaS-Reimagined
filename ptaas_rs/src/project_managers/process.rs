@@ -5,7 +5,7 @@ use std::{
 };
 
 use thiserror::Error as ThisError;
-use tokio::process::{Child, ChildStderr, ChildStdout, Command};
+use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 
 #[derive(Debug, Clone)]
 pub enum Status {
@@ -72,6 +72,10 @@ impl Process {
             child_killed_successfuly: false,
             kill_on_drop,
         })
+    }
+
+    pub fn stdin(&mut self) -> Option<ChildStdin> {
+        self.child.stdin.take()
     }
 
     pub fn stdout(&mut self) -> Option<ChildStdout> {
