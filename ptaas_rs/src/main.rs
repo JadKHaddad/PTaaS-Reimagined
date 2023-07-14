@@ -22,7 +22,15 @@ async fn main() {
         .init();
 
     let program = "python.exe";
-    match Process::program_exists(program, Stdio::null(), Stdio::null(), Stdio::null()).await {
+    match Process::program_exists(
+        Some("does python.exe exists".into()),
+        program,
+        Stdio::null(),
+        Stdio::null(),
+        Stdio::null(),
+    )
+    .await
+    {
         Ok(exists) => {
             if exists {
                 println!("{program} exists");
@@ -36,6 +44,7 @@ async fn main() {
     }
 
     let mut p = Process::new(
+        Some("numbers.ps1".into()),
         "powershell.exe",
         vec!["./numbers.ps1"],
         ".",
@@ -47,7 +56,7 @@ async fn main() {
     .await
     .unwrap();
 
-    tokio::time::sleep(Duration::from_secs(10)).await;
+    tokio::time::sleep(Duration::from_secs(20)).await;
     println!("{:?}", p.kill_and_wait_and_set_status().await);
     println!("{:?}", p.status().unwrap());
 

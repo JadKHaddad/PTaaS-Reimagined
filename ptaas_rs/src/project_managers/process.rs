@@ -9,8 +9,6 @@ use std::{
 use thiserror::Error as ThisError;
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 
-// TODO: id is lost when process is no longer running!. use a given id in the constructor.
-
 #[derive(Debug, Clone)]
 pub enum Status {
     Running,
@@ -29,6 +27,7 @@ pub struct Output {
 #[derive(Debug)]
 pub struct Process {
     child: Child,
+    given_id: Option<String>,
     status: Status,
     child_terminated_and_awaited_successfuly: bool,
     child_killed_successfuly: bool,
@@ -68,6 +67,7 @@ pub enum ProcessKillAndWaitError {
 /// Ensure calling `kill_and_wait_and_set_status` on the process before dropping it.
 impl Process {
     pub async fn new<I, S, P, T>(
+        given_id: Option<String>,
         program: S,
         args: I,
         current_dir: P,
@@ -94,6 +94,7 @@ impl Process {
 
         Ok(Self {
             child,
+            given_id,
             status: Status::Running,
             child_terminated_and_awaited_successfuly: false,
             child_killed_successfuly: false,
@@ -107,6 +108,7 @@ impl Process {
     /// An error does not necessarily mean that the program does not exist.
     /// `Ok(true)` means that the program exists.
     pub async fn program_exists<S, T>(
+        given_process_id: Option<String>,
         program: S,
         stdin: T,
         stdout: T,
@@ -116,7 +118,8 @@ impl Process {
         S: AsRef<OsStr>,
         T: Into<Stdio>,
     {
-        match Self::new(program, [], ".", stdin, stdout, stderr, true).await {
+        let given_id = Some(given_process_id.unwrap_or_else(|| String::from("`program_exists`")));
+        match Self::new(given_id, program, [], ".", stdin, stdout, stderr, true).await {
             Ok(mut process) => {
                 // Filtering out `ErrorKind::PermissionDenied` on `kill_and_wait_and_set_status`,
                 // because the program could exit immediately after spawning.
@@ -177,23 +180,40 @@ impl Process {
 
     /// Maybe useful if 'kill_and_wait_and_set_status' fails with 'CouldNotKillProcess' error.
     pub fn start_kill(&mut self) -> Result<(), IoError> {
-        tracing::warn!(id = self.id(), "Sending kill signal to process.");
+        tracing::warn!(
+            id = self.id(),
+            given_id = self.given_id(),
+            "Sending kill signal to process."
+        );
         self.child.start_kill()
     }
 
     fn set_status_on_ex_status(&mut self, ex_status: ExitStatus) -> &Status {
         if ex_status.success() {
             self.status = Status::TerminatedSuccessfully;
-            tracing::debug!(id = self.id(), "Process terminated successfully.");
+            tracing::debug!(
+                id = self.id(),
+                given_id = self.given_id(),
+                "Process terminated successfully."
+            );
         } else {
             match ex_status.code() {
                 Some(code) => {
                     self.status = Status::TerminatedWithError(code);
-                    tracing::debug!(id = self.id(), code, "Process terminated with error.");
+                    tracing::debug!(
+                        id = self.id(),
+                        code,
+                        given_id = self.given_id(),
+                        "Process terminated with error."
+                    );
                 }
                 None => {
                     self.status = Status::TerminatedWithUnknownError;
-                    tracing::debug!(id = self.id(), "Process terminated with unknown error.");
+                    tracing::debug!(
+                        id = self.id(),
+                        given_id = self.given_id(),
+                        "Process terminated with unknown error."
+                    );
                 }
             }
         }
@@ -224,10 +244,10 @@ impl Process {
         tokio::select! {
             _ = tokio::time::sleep(duration) => {
                 self.kill_and_wait_and_set_status().await?;
-                tracing::warn!(id = self.id(), "Process killed after timeout.");
+                tracing::warn!(id = self.id(), given_id = self.given_id(), "Process killed after timeout.");
             }
             _ = self.wait_and_set_status() => {
-                tracing::debug!(id = self.id(), "Process terminated before timeout.");
+                tracing::debug!(id = self.id(), given_id = self.given_id(), "Process terminated before timeout.");
             }
         }
 
@@ -240,6 +260,10 @@ impl Process {
 
     pub fn id(&self) -> Option<u32> {
         self.child.id()
+    }
+
+    pub fn given_id(&self) -> &Option<String> {
+        &self.given_id
     }
 
     pub fn stdin(&mut self) -> Option<ChildStdin> {
@@ -260,9 +284,9 @@ impl Drop for Process {
     fn drop(&mut self) {
         if !self.child_terminated_and_awaited_successfuly {
             if !self.child_killed_successfuly && self.kill_on_drop {
-                tracing::warn!(id = self.id(), "Process was not explicitly killed and the status was not or could not be checked. Process may still be running. Sending kill signal to process.");
+                tracing::warn!(id = self.id(), given_id = self.given_id(), "Process was not explicitly killed and the status was not or could not be checked. Process may still be running. Sending kill signal to process.");
             }
-            tracing::warn!(id = self.id(), "Process was dropped without being awaited. Not awaited processes may cause zombie processes.");
+            tracing::warn!(id = self.id(), given_id = self.given_id(), "Process was dropped without being awaited. Not awaited processes may cause zombie processes.");
         }
     }
 }
