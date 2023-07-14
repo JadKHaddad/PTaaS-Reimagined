@@ -39,15 +39,15 @@ async fn main() {
     });
 
     tokio::time::sleep(Duration::from_secs(3)).await;
-    match p.status().await.unwrap() {
-        Status::Running => {
-            println!("Process is still running, killing it");
-            p.kill_and_wait().await.unwrap();
-        }
-        _ => {
-            println!("Process is not running");
-        }
-    }
+    // match p.status().unwrap() {
+    //     Status::Running => {
+    //         println!("Process is still running");
+    //         // p.kill_and_wait().await.unwrap();
+    //     }
+    //     _ => {
+    //         println!("Process is not running");
+    //     }
+    // }
 
     print_dummies();
     if std::env::var_os("RUST_LOG").is_none() {

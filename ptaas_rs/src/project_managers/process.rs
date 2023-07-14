@@ -19,8 +19,8 @@ pub enum Status {
 pub struct Process {
     child: Child,
     status: Status,
-    child_awaited: bool,
-    child_killed: bool,
+    child_terminated_and_awaited_successfuly: bool,
+    child_killed_successfuly: bool,
     kill_on_drop: bool,
 }
 
@@ -38,6 +38,7 @@ pub enum ProcessKillAndWaitError {
     CouldNotWaitForProcess(#[source] std::io::Error),
 }
 
+/// Ensure calling `kill_and_wait` on the process before dropping it
 impl Process {
     pub async fn new<I, S, P, T>(
         program: S,
@@ -67,8 +68,8 @@ impl Process {
         Ok(Self {
             child,
             status: Status::Running,
-            child_awaited: false,
-            child_killed: false,
+            child_terminated_and_awaited_successfuly: false,
+            child_killed_successfuly: false,
             kill_on_drop,
         })
     }
@@ -87,7 +88,7 @@ impl Process {
             .kill()
             .await
             .and_then(|_| {
-                self.child_killed = true;
+                self.child_killed_successfuly = true;
                 Ok(())
             })
             .map_err(|error| ProcessKillAndWaitError::CouldNotKillProcess(error))?;
@@ -124,14 +125,14 @@ impl Process {
                 }
             }
         }
-        self.child_awaited = true;
+        self.child_terminated_and_awaited_successfuly = true;
     }
 
     pub fn id(&self) -> Option<u32> {
         self.child.id()
     }
 
-    pub async fn status(&mut self) -> Result<&Status, std::io::Error> {
+    pub fn status(&mut self) -> Result<&Status, std::io::Error> {
         self.child.try_wait().and_then(|option_ex_status| {
             match option_ex_status {
                 Some(ex_status) => {
@@ -147,22 +148,12 @@ impl Process {
 }
 
 impl Drop for Process {
+    /// Can not kill and wait for termination here, because these are async functions
     fn drop(&mut self) {
-        if !self.child_killed {
-            // the status was not checked or the process could not be awaited due to an error
-            if let Status::Running = self.status {
-                tracing::warn!(
-                    id = self.id(),
-                    "Process was not explicitly killed and the status was not or could not be checked"
-                );
-
-                if self.kill_on_drop {
-                    tracing::warn!(id = self.id(), "Sending kill signal to process");
-                }
+        if !self.child_terminated_and_awaited_successfuly {
+            if !self.child_killed_successfuly && self.kill_on_drop {
+                tracing::warn!(id = self.id(), "Process was not explicitly killed and the status was not or could not be checked. Process may still be running. Sending kill signal to process");
             }
-        }
-
-        if !self.child_awaited {
             tracing::warn!(id = self.id(), "Process was dropped without being awaited. Not awaited processes may cause zombie processes");
         }
     }
