@@ -104,7 +104,8 @@ impl Process {
     /// Spawns a process and kills it immediately after a successful spawn returning `true`.
     /// Returns `false`, if `ErrorKind::NotFound` is returned.
     /// Otherwise returns an error.
-    /// A Program exits if return value is `Ok(true)`.
+    /// An error does not necessarily mean that the program does not exist.
+    /// `Ok(true)` means that the program exists.
     pub async fn program_exists<S, T>(
         program: S,
         stdin: T,
