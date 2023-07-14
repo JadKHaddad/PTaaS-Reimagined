@@ -106,8 +106,6 @@ impl Process {
     /// Otherwise returns an error.
     /// An error does not necessarily mean that the program does not exist.
     /// `Ok(true)` means that the program exists.
-    /// Filtering out `ErrorKind::PermissionDenied` on `kill_and_wait_and_set_status`,
-    /// because the program could exit immediately after spawning.
     pub async fn program_exists<S, T>(
         program: S,
         stdin: T,
@@ -120,6 +118,10 @@ impl Process {
     {
         match Self::new(program, [], ".", stdin, stdout, stderr, true).await {
             Ok(mut process) => {
+                // Filtering out `ErrorKind::PermissionDenied` on `kill_and_wait_and_set_status`,
+                // because the program could exit immediately after spawning.
+
+                /*
                 process
                     .kill_and_wait_and_set_status()
                     .await
@@ -131,6 +133,11 @@ impl Process {
                         }
                         return Err(error);
                     })?;
+                */
+
+                process
+                    .wait_with_timeout_and_output(Duration::from_micros(1))
+                    .await?;
 
                 Ok(true)
             }

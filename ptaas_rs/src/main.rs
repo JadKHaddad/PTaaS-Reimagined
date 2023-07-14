@@ -21,19 +21,13 @@ async fn main() {
         .with_env_filter(EnvFilter::from_default_env())
         .init();
 
-    match Process::program_exists(
-        "powershells.exe",
-        Stdio::null(),
-        Stdio::null(),
-        Stdio::null(),
-    )
-    .await
-    {
+    let program = "python.exe";
+    match Process::program_exists(program, Stdio::null(), Stdio::null(), Stdio::null()).await {
         Ok(exists) => {
             if exists {
-                println!("Powershell exists");
+                println!("{program} exists");
             } else {
-                println!("Powershell does not exist");
+                println!("{program} does not exist");
             }
         }
         Err(error) => {
@@ -54,7 +48,8 @@ async fn main() {
     .unwrap();
 
     tokio::time::sleep(Duration::from_secs(10)).await;
-    p.kill_and_wait_and_set_status().await.unwrap();
+    println!("{:?}", p.kill_and_wait_and_set_status().await);
+    println!("{:?}", p.status().unwrap());
 
     // match p.wait_with_timeout_and_output(Duration::from_secs(6)).await {
     //     Ok(_) => {}
