@@ -16,6 +16,13 @@ pub enum Status {
 }
 
 #[derive(Debug)]
+pub struct Output {
+    pub status: Status,
+    pub stdout: Option<ChildStdout>,
+    pub stderr: Option<ChildStderr>,
+}
+
+#[derive(Debug)]
 pub struct Process {
     child: Child,
     status: Status,
@@ -87,24 +94,28 @@ impl Process {
     }
 
     /// Kill may fail if the process has already exited
-    pub async fn kill_and_wait(mut self) -> Result<(), ProcessKillAndWaitError> {
-        self.child
-            .kill()
+    pub async fn kill_and_wait(&mut self) -> Result<(), ProcessKillAndWaitError> {
+        self.kill()
             .await
-            .and_then(|_| {
-                self.child_killed_successfuly = true;
-                Ok(())
-            })
             .map_err(|error| ProcessKillAndWaitError::CouldNotKillProcess(error))?;
 
-        self.child
-            .wait()
+        self.wait_and_set_status()
             .await
-            .and_then(|ex_status| {
-                self.set_status_on_ex_status(ex_status);
-                Ok(())
-            })
             .map_err(|error| ProcessKillAndWaitError::CouldNotWaitForProcess(error))
+    }
+
+    async fn kill(&mut self) -> Result<(), std::io::Error> {
+        self.child.kill().await.and_then(|_| {
+            self.child_killed_successfuly = true;
+            Ok(())
+        })
+    }
+
+    async fn wait_and_set_status(&mut self) -> Result<(), std::io::Error> {
+        self.child.wait().await.and_then(|ex_status| {
+            self.set_status_on_ex_status(ex_status);
+            Ok(())
+        })
     }
 
     /// Maybe useful if 'kill_and_wait' fails with 'CouldNotKillProcess' error
@@ -113,7 +124,7 @@ impl Process {
         self.child.start_kill()
     }
 
-    fn set_status_on_ex_status(&mut self, ex_status: ExitStatus) {
+    fn set_status_on_ex_status(&mut self, ex_status: ExitStatus) -> &Status {
         if ex_status.success() {
             self.status = Status::TerminatedSuccessfully;
             tracing::debug!(id = self.id(), "Process terminated successfully");
@@ -130,6 +141,7 @@ impl Process {
             }
         }
         self.child_terminated_and_awaited_successfuly = true;
+        &self.status
     }
 
     pub fn id(&self) -> Option<u32> {
@@ -147,6 +159,16 @@ impl Process {
                 }
             }
             Ok(&self.status)
+        })
+    }
+
+    pub async fn wait_with_output(mut self) -> Result<Output, std::io::Error> {
+        self.wait_and_set_status().await?;
+
+        Ok(Output {
+            status: self.status.clone(),
+            stdout: self.stdout(),
+            stderr: self.stderr(),
         })
     }
 }
