@@ -56,8 +56,9 @@ async fn main() {
     .await
     .unwrap();
 
-    tokio::time::sleep(Duration::from_secs(20)).await;
+    tokio::time::sleep(Duration::from_secs(6)).await;
     println!("{:?}", p.kill_and_wait_and_set_status().await);
+    println!("{:?}", p.status().unwrap());
     println!("{:?}", p.status().unwrap());
 
     // match p.wait_with_timeout_and_output(Duration::from_secs(6)).await {

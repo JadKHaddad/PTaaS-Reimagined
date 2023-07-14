@@ -221,6 +221,8 @@ impl Process {
         &self.status
     }
 
+    /// Tries to wait for the process and sets the status.
+    /// The status will not be updated otherwise.
     pub fn status(&mut self) -> Result<&Status, IoError> {
         self.child.try_wait().and_then(|option_ex_status| {
             match option_ex_status {
@@ -237,6 +239,8 @@ impl Process {
 
     /// After calling this funtion `stdout()` and `stderr()` will return `None`.
     /// If you want to use these values, use the returned `Output` instead.
+    /// Depending on tokio's implementation of `select!`,
+    /// it should not be possible to kill the process after it has terminated.
     pub async fn wait_with_timeout_and_output(
         &mut self,
         duration: Duration,
