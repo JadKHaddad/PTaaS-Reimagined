@@ -62,7 +62,7 @@ pub enum ProcessKillAndWaitError {
     CouldNotWaitForProcess(#[source] IoError),
 }
 
-/// Ensure calling `kill_and_wait` on the process before dropping it
+/// Ensure calling `kill_and_wait_and_set_status` on the process before dropping it.
 impl Process {
     pub async fn new<I, S, P, T>(
         program: S,
@@ -98,6 +98,10 @@ impl Process {
         })
     }
 
+    /// Spawns a process and kills it immediately after a successful spawn returning `true`.
+    /// Returns `false`, if `ErrorKind::NotFound` is returned.
+    /// Otherwise returns an error.
+    /// A Program exits if return value is `Ok(true)`.
     pub async fn program_exists<S, T>(
         program: S,
         stdin: T,
@@ -122,7 +126,7 @@ impl Process {
         }
     }
 
-    /// Kill may fail if the process has already exited
+    /// Kill may fail if the process has already exited.
     pub async fn kill_and_wait_and_set_status(&mut self) -> Result<(), ProcessKillAndWaitError> {
         self.kill()
             .await
@@ -147,7 +151,7 @@ impl Process {
         })
     }
 
-    /// Maybe useful if 'kill_and_wait' fails with 'CouldNotKillProcess' error
+    /// Maybe useful if 'kill_and_wait_and_set_status' fails with 'CouldNotKillProcess' error.
     pub fn start_kill(&mut self) -> Result<(), IoError> {
         tracing::warn!(id = self.id(), "Sending kill signal to process.");
         self.child.start_kill()
@@ -187,7 +191,7 @@ impl Process {
         })
     }
 
-    /// Use only if you know your program will terminate!
+    /// Use only if you know your program will terminate!.
     pub async fn wait_with_output(mut self) -> Result<Output, IoError> {
         self.wait_and_set_status().await?;
 
@@ -216,7 +220,7 @@ impl Process {
 }
 
 impl Drop for Process {
-    /// Can not kill and wait for termination here, because these are async functions
+    /// Can not kill and wait for termination here, because these are async functions.
     fn drop(&mut self) {
         if !self.child_terminated_and_awaited_successfuly {
             if !self.child_killed_successfuly && self.kill_on_drop {
