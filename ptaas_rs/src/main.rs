@@ -9,34 +9,56 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() {
-    let mut p = Process::new(
-        "powershell.exe",
-        vec!["./numbers.ps1"],
-        ".",
-        Stdio::inherit(),
-        Stdio::piped(),
-        Stdio::inherit(),
-        true,
+    match Process::program_exists(
+        "powershells.exe",
+        Stdio::null(),
+        Stdio::null(),
+        Stdio::null(),
     )
     .await
-    .unwrap();
-
-    let stdout = p.stdout();
-
-    // Create a file to write the lines
-    let mut file = tokio::fs::File::create("output.txt").await.unwrap();
-
-    tokio::spawn(async move {
-        if let Some(stdout) = stdout {
-            let reader = io::BufReader::new(stdout);
-            let mut lines = reader.lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                println!("{}", line);
-                //file.write_all(line.as_bytes()).await.unwrap();
-                //file.write_all(b"\n").await.unwrap();
+    {
+        Ok(exists) => {
+            if exists {
+                println!("Powershell exists");
+            } else {
+                println!("Powershell does not exist");
             }
         }
-    });
+        Err(error) => {
+            println!("Error: {}", error);
+        }
+    }
+
+    std::process::exit(0);
+
+    // let mut p = Process::new(
+    //     "powershell.exe",
+    //     vec!["./numbers.ps1"],
+    //     ".",
+    //     Stdio::inherit(),
+    //     Stdio::piped(),
+    //     Stdio::inherit(),
+    //     true,
+    // )
+    // .await
+    // .unwrap();
+
+    // let stdout = p.stdout();
+
+    // // Create a file to write the lines
+    // let mut file = tokio::fs::File::create("output.txt").await.unwrap();
+
+    // tokio::spawn(async move {
+    //     if let Some(stdout) = stdout {
+    //         let reader = io::BufReader::new(stdout);
+    //         let mut lines = reader.lines();
+    //         while let Ok(Some(line)) = lines.next_line().await {
+    //             println!("{}", line);
+    //             //file.write_all(line.as_bytes()).await.unwrap();
+    //             //file.write_all(b"\n").await.unwrap();
+    //         }
+    //     }
+    // });
 
     tokio::time::sleep(Duration::from_secs(3)).await;
     // match p.status().unwrap() {
