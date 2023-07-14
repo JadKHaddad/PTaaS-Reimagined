@@ -191,29 +191,13 @@ impl Process {
     fn set_status_on_ex_status(&mut self, ex_status: ExitStatus) -> &Status {
         if ex_status.success() {
             self.status = Status::TerminatedSuccessfully;
-            tracing::debug!(
-                id = self.id(),
-                given_id = self.given_id(),
-                "Process terminated successfully."
-            );
         } else {
             match ex_status.code() {
                 Some(code) => {
                     self.status = Status::TerminatedWithError(code);
-                    tracing::debug!(
-                        id = self.id(),
-                        code,
-                        given_id = self.given_id(),
-                        "Process terminated with error."
-                    );
                 }
                 None => {
                     self.status = Status::TerminatedWithUnknownError;
-                    tracing::debug!(
-                        id = self.id(),
-                        given_id = self.given_id(),
-                        "Process terminated with unknown error."
-                    );
                 }
             }
         }
