@@ -15,12 +15,12 @@ async fn main() {
         DartField {
             keywords: vec!["final".into()],
             name: "id".into(),
-            type_: DartType::Class("String".into()),
+            type_: DartType::Primitive("String".into()),
         },
         DartField {
             keywords: vec!["final".into()],
             name: "installed".into(),
-            type_: DartType::Class("bool".into()),
+            type_: DartType::Primitive("bool".into()),
         },
         DartField {
             keywords: vec!["final".into()],

@@ -2,6 +2,8 @@ pub trait DartConvertible {
     fn to_dart() -> &'static str;
 }
 
+//TODO: Add optional fields and stuff, all modifiers for json_serializable
+
 /// Overkilling a simple task, As simple as creating a template file and replacing some placeholders :)
 pub struct DartClass {
     pub name: String,
@@ -53,7 +55,6 @@ impl ToString for DartField {
 
 pub enum DartType {
     Primitive(String),
-    Class(String),
     List(String),
     Map(String, String),
 }
@@ -62,7 +63,6 @@ impl ToString for DartType {
     fn to_string(&self) -> String {
         match self {
             DartType::Primitive(name) => name.to_string(),
-            DartType::Class(name) => name.to_string(),
             DartType::List(name) => format!("List<{}>", name),
             DartType::Map(key, value) => format!("Map<{}, {}>", key, value),
         }
