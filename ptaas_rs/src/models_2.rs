@@ -1,4 +1,4 @@
-use convertible_macros::DartConvertible;
+use convertible::macros::DartConvertible;
 use serde::{Deserialize, Serialize};
 
 // Models
