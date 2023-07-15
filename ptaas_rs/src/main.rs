@@ -16,33 +16,41 @@ async fn main() {
             keywords: vec!["final".into()],
             name: "id".into(),
             type_: DartType::Primitive("String".into()),
+            optional: false,
         },
         DartField {
             keywords: vec!["final".into()],
             name: "installed".into(),
             type_: DartType::Primitive("bool".into()),
+            optional: false,
         },
         DartField {
             keywords: vec!["final".into()],
             name: "scripts".into(),
             type_: DartType::List("Script".into()),
+            optional: false,
         },
     ];
 
     let cons_parameters = DartParameters::Named(vec![
-        NamedDartParameter::Required(DartParameter::ConstructorParameter(
-            DartConstructorParameter { name: "id".into() },
-        )),
-        NamedDartParameter::Required(DartParameter::ConstructorParameter(
-            DartConstructorParameter {
+        NamedDartParameter {
+            required: true,
+            parameter: DartParameter::ConstructorParameter(DartConstructorParameter {
+                name: "id".into(),
+            }),
+        },
+        NamedDartParameter {
+            required: true,
+            parameter: DartParameter::ConstructorParameter(DartConstructorParameter {
                 name: "installed".into(),
-            },
-        )),
-        NamedDartParameter::Required(DartParameter::ConstructorParameter(
-            DartConstructorParameter {
+            }),
+        },
+        NamedDartParameter {
+            required: true,
+            parameter: DartParameter::ConstructorParameter(DartConstructorParameter {
                 name: "scripts".into(),
-            },
-        )),
+            }),
+        },
     ]);
 
     let constructor = DartConstructor::OneLiner(DartOnelineConstructor {
@@ -85,6 +93,7 @@ async fn main() {
     });
 
     let dart_class = DartClass {
+        decorators: vec!["@JsonSerializable()".into()],
         name: "Project".into(),
         fields,
         constructors: vec![constructor, factory],

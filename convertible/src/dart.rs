@@ -2,10 +2,10 @@ pub trait DartConvertible {
     fn to_dart() -> &'static str;
 }
 
-//TODO: Add optional fields and stuff, all modifiers for json_serializable
-
 /// Overkilling a simple task, As simple as creating a template file and replacing some placeholders :)
 pub struct DartClass {
+    /// @JsonSerializable() a list of Strings for now
+    pub decorators: Vec<String>,
     pub name: String,
     pub fields: Vec<DartField>,
     pub constructors: Vec<DartConstructor>,
@@ -14,6 +14,8 @@ pub struct DartClass {
 
 impl ToString for DartClass {
     fn to_string(&self) -> String {
+        let decorators = self.decorators.join("\n");
+
         let fields = self
             .fields
             .iter()
@@ -36,26 +38,37 @@ impl ToString for DartClass {
             .join("\n\n\t");
 
         format!(
-            "class {} {{\n\t{}\n\n\t{}\n\n\t{}\n}}",
-            self.name, fields, constructors, methods
+            "{}\nclass {} {{\n\t{}\n\n\t{}\n\n\t{}\n}}",
+            decorators, self.name, fields, constructors, methods
         )
     }
 }
 
 pub struct DartField {
+    /// Final or const
     pub keywords: Vec<String>,
     pub name: String,
     pub type_: DartType,
+    /// Add `?`to the type
+    pub optional: bool,
 }
 
 impl ToString for DartField {
     fn to_string(&self) -> String {
         let keywords = self.keywords.join(" ");
-        format!("{} {} {};", keywords, self.type_.to_string(), self.name)
+        let optional_mark = if self.optional { "?" } else { "" };
+        format!(
+            "{} {}{} {};",
+            keywords,
+            self.type_.to_string(),
+            optional_mark,
+            self.name
+        )
     }
 }
 
 pub enum DartType {
+    /// Every type as a string
     Primitive(String),
     List(String),
     Map(String, String),
@@ -85,34 +98,14 @@ impl ToString for DartConstructor {
     }
 }
 
-pub enum DartMethod {
-    OneLiner(DartOnelineMethod),
-}
-
-impl ToString for DartMethod {
-    fn to_string(&self) -> String {
-        match self {
-            DartMethod::OneLiner(one_liner) => one_liner.to_string(),
-        }
-    }
-}
-
-pub struct DartOnelineMethod {
+pub struct DartOnelineConstructor {
     pub name: String,
-    pub type_: DartType,
     pub parameters: DartParameters,
-    pub body: MethodBody,
 }
 
-impl ToString for DartOnelineMethod {
+impl ToString for DartOnelineConstructor {
     fn to_string(&self) -> String {
-        format!(
-            "{} {}({}) => {};",
-            self.type_.to_string(),
-            self.name,
-            self.parameters.to_string(),
-            self.body.to_string()
-        )
+        format!("{} ({});", self.name, self.parameters.to_string())
     }
 }
 
@@ -148,6 +141,37 @@ impl ToString for DartOnelineFactoryConstructor {
     }
 }
 
+pub enum DartMethod {
+    OneLiner(DartOnelineMethod),
+}
+
+impl ToString for DartMethod {
+    fn to_string(&self) -> String {
+        match self {
+            DartMethod::OneLiner(one_liner) => one_liner.to_string(),
+        }
+    }
+}
+
+pub struct DartOnelineMethod {
+    pub name: String,
+    pub type_: DartType,
+    pub parameters: DartParameters,
+    pub body: MethodBody,
+}
+
+impl ToString for DartOnelineMethod {
+    fn to_string(&self) -> String {
+        format!(
+            "{} {}({}) => {};",
+            self.type_.to_string(),
+            self.name,
+            self.parameters.to_string(),
+            self.body.to_string()
+        )
+    }
+}
+
 pub enum MethodBody {
     OneLiner(OnelineMethodBody),
 }
@@ -169,17 +193,6 @@ impl ToString for OnelineMethodBody {
     fn to_string(&self) -> String {
         let parameters = self.parameters.join(", ");
         format!("{}({})", self.name, parameters)
-    }
-}
-
-pub struct DartOnelineConstructor {
-    pub name: String,
-    pub parameters: DartParameters,
-}
-
-impl ToString for DartOnelineConstructor {
-    fn to_string(&self) -> String {
-        format!("{} ({});", self.name, self.parameters.to_string())
     }
 }
 
@@ -208,19 +221,16 @@ impl ToString for DartParameters {
     }
 }
 
-pub enum NamedDartParameter {
-    Required(DartParameter),
-    Optional(DartParameter),
+pub struct NamedDartParameter {
+    /// Sets required keyword
+    pub required: bool,
+    pub parameter: DartParameter,
 }
 
 impl ToString for NamedDartParameter {
     fn to_string(&self) -> String {
-        match self {
-            NamedDartParameter::Required(parameter) => {
-                format! {"required {}", parameter.to_string()}
-            }
-            NamedDartParameter::Optional(parameter) => parameter.to_string(),
-        }
+        let required = if self.required { "required " } else { "" };
+        format!("{}{}", required, self.parameter.to_string())
     }
 }
 
