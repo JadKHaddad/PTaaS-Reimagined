@@ -18,6 +18,13 @@ pub struct Script {
     pub id: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct APIError {
+    pub message: String,
+    pub reason: String,
+}
+
 // Responses
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -37,10 +44,10 @@ pub enum APIResponseProcessd {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub enum APIResponseFailed {
-    MissingToken,
-    EmptyToken,
-    NotLoggedIn,
-    InternalServerError,
+    MissingToken(APIError),
+    EmptyToken(APIError),
+    NotLoggedIn(APIError),
+    InternalServerError(APIError),
 }
 
 // Projects
@@ -61,8 +68,8 @@ pub struct AllProjectsResponseProcessed {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub enum AllProjectsResponseFailed {
-    CantReadProjects,
-    AProjectIsMissing,
+    CantReadProjects(APIError),
+    AProjectIsMissing(APIError),
 }
 
 // Scripts
@@ -83,12 +90,15 @@ pub struct AllScriptsResponseProcessed {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub enum AllScriptsResponseFailed {
-    CantReadScripts,
-    AScriptIsMissing,
+    CantReadScripts(APIError),
+    AScriptIsMissing(APIError),
 }
 
 pub fn print_dummies() {
-    let api_failed = APIResponse::Failed(APIResponseFailed::MissingToken);
+    let api_failed = APIResponse::Failed(APIResponseFailed::MissingToken(APIError {
+        message: "where the fuck is the token?".to_string(),
+        reason: "permissions".to_string(),
+    }));
 
     let all_proj = APIResponse::Processed(APIResponseProcessd::AllProjects(
         AllProjectsResponse::Processed(AllProjectsResponseProcessed {
@@ -103,7 +113,10 @@ pub fn print_dummies() {
     ));
 
     let all_proj_failed = APIResponse::Processed(APIResponseProcessd::AllProjects(
-        AllProjectsResponse::Failed(AllProjectsResponseFailed::AProjectIsMissing),
+        AllProjectsResponse::Failed(AllProjectsResponseFailed::AProjectIsMissing(APIError {
+            message: "We are missing something".to_string(),
+            reason: "permissions".to_string(),
+        })),
     ));
 
     let all_scripts = APIResponse::Processed(APIResponseProcessd::AllScripts(
@@ -115,7 +128,10 @@ pub fn print_dummies() {
     ));
 
     let all_scripts_failed = APIResponse::Processed(APIResponseProcessd::AllScripts(
-        AllScriptsResponse::Failed(AllScriptsResponseFailed::AScriptIsMissing),
+        AllScriptsResponse::Failed(AllScriptsResponseFailed::AScriptIsMissing(APIError {
+            message: "Well that did not work".to_string(),
+            reason: "permissions".to_string(),
+        })),
     ));
 
     // print them with serde_json

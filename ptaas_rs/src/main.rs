@@ -8,6 +8,10 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() {
+    print_dummies();
+
+    std::process::exit(0);
+
     if std::env::var_os("RUST_LOG").is_none() {
         std::env::set_var("RUST_LOG", "ptaas_rs=trace,tower_http=off,hyper=off");
     }

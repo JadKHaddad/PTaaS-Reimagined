@@ -29,6 +29,19 @@ class Script {
   Map<String, dynamic> toJson() => _$ScriptToJson(this);
 }
 
+@JsonSerializable()
+class APIError {
+  final String message;
+  final String? reason;
+
+  APIError({required this.message, required this.reason});
+
+  factory APIError.fromJson(Map<String, dynamic> json) =>
+      _$APIErrorFromJson(json);
+
+  Map<String, dynamic> toJson() => _$APIErrorToJson(this);
+}
+
 // Responses
 
 @JsonSerializable()
@@ -57,11 +70,23 @@ class APIResponseProcessd {
   Map<String, dynamic> toJson() => _$APIResponseProcessdToJson(this);
 }
 
-enum APIResponseFailed {
-  missingToken,
-  emptyToken,
-  notLoggedIn,
-  internalServerError,
+@JsonSerializable()
+class APIResponseFailed {
+  APIError? missingToken;
+  APIError? emptyToken;
+  APIError? notLoggedIn;
+  APIError? internalServerError;
+
+  APIResponseFailed(
+      {this.missingToken,
+      this.emptyToken,
+      this.notLoggedIn,
+      this.internalServerError});
+
+  factory APIResponseFailed.fromJson(Map<String, dynamic> json) =>
+      _$APIResponseFailedFromJson(json);
+
+  Map<String, dynamic> toJson() => _$APIResponseFailedToJson(this);
 }
 
 // Projects
@@ -91,9 +116,17 @@ class AllProjectsResponseProcessed {
   Map<String, dynamic> toJson() => _$AllProjectsResponseProcessedToJson(this);
 }
 
-enum AllProjectsResponseFailed {
-  cantReadProjects,
-  aProjectIsMissing,
+@JsonSerializable()
+class AllProjectsResponseFailed {
+  APIError? cantReadProjects;
+  APIError? aProjectIsMissing;
+
+  AllProjectsResponseFailed({this.cantReadProjects, this.aProjectIsMissing});
+
+  factory AllProjectsResponseFailed.fromJson(Map<String, dynamic> json) =>
+      _$AllProjectsResponseFailedFromJson(json);
+
+  Map<String, dynamic> toJson() => _$AllProjectsResponseFailedToJson(this);
 }
 
 // Scripts
@@ -123,4 +156,15 @@ class AllScriptsResponseProcessed {
   Map<String, dynamic> toJson() => _$AllScriptsResponseProcessedToJson(this);
 }
 
-enum AllScriptsResponseFailed { cantReadScripts, aScriptIsMissing }
+@JsonSerializable()
+class AllScriptsResponseFailed {
+  APIError? cantReadScripts;
+  APIError? aScriptIsMissing;
+
+  AllScriptsResponseFailed({this.cantReadScripts, this.aScriptIsMissing});
+
+  factory AllScriptsResponseFailed.fromJson(Map<String, dynamic> json) =>
+      _$AllScriptsResponseFailedFromJson(json);
+
+  Map<String, dynamic> toJson() => _$AllScriptsResponseFailedToJson(this);
+}

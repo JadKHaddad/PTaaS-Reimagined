@@ -11,15 +11,16 @@ class MainApp extends StatelessWidget {
   const MainApp({super.key});
 
   void _doSomeAPIStuff() {
-    String apiFailed = '{"failed":"missingToken"}';
+    String apiFailed =
+        '{"failed":{"missingToken":{"message":"where the fuck is the token?","reason":"permissions"}}}';
     String allProj =
         '{"processed":{"allProjects":{"processed":{"projects":[{"id":"id","installed":true,"scripts":[{"id":"id"}]}]}}}}';
     String allProjFailed =
-        '{"processed":{"allProjects":{"failed":"aProjectIsMissing"}}}';
+        '{"processed":{"allProjects":{"failed":{"aProjectIsMissing":{"message":"We are missing something","reason":"permissions"}}}}}';
     String allScripts =
         '{"processed":{"allScripts":{"processed":{"scripts":[{"id":"id"}]}}}}';
     String allScriptsFailed =
-        '{"processed":{"allScripts":{"failed":"aScriptIsMissing"}}}';
+        '{"processed":{"allScripts":{"failed":{"aScriptIsMissing":{"message":"Well that did not work","reason":"permissions"}}}}}';
 
     Map<String, dynamic> jsonApiFailed = jsonDecode(apiFailed);
 
@@ -29,7 +30,7 @@ class MainApp extends StatelessWidget {
     Map<String, dynamic> jsonAllScripts = jsonDecode(allScripts);
     Map<String, dynamic> jsonAllScriptsFailed = jsonDecode(allScriptsFailed);
 
-    APIResponse apiResponse = APIResponse.fromJson(jsonApiFailed);
+    APIResponse apiResponse = APIResponse.fromJson(jsonAllProj);
     if (apiResponse.processed != null) {
       print("API processed: \n");
       if (apiResponse.processed!.allProjects != null) {
