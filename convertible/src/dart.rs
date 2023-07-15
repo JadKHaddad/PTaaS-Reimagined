@@ -20,12 +20,14 @@ impl ToString for DartClass {
             .map(|field| field.to_string())
             .collect::<Vec<String>>()
             .join("\n\t");
+
         let constructors = self
             .constructors
             .iter()
             .map(|constructor| constructor.to_string())
             .collect::<Vec<String>>()
             .join("\n\n\t");
+
         let methods = self
             .methods
             .iter()
@@ -188,23 +190,20 @@ pub enum DartParameters {
 
 impl ToString for DartParameters {
     fn to_string(&self) -> String {
+        fn collect_params<T: ToString>(params: &[T]) -> String {
+            params
+                .iter()
+                .map(|parameter| parameter.to_string())
+                .collect::<Vec<String>>()
+                .join(", ")
+        }
+
         match self {
             DartParameters::Named(named) => {
-                let params = named
-                    .iter()
-                    .map(|parameter| parameter.to_string())
-                    .collect::<Vec<String>>()
-                    .join(", ");
+                let params = collect_params(named);
                 format!("{{ {} }}", params)
             }
-            DartParameters::Positional(positional) => {
-                let params = positional
-                    .iter()
-                    .map(|parameter| parameter.to_string())
-                    .collect::<Vec<String>>()
-                    .join(", ");
-                params
-            }
+            DartParameters::Positional(positional) => collect_params(positional),
         }
     }
 }
