@@ -1,6 +1,5 @@
 use convertible::macros::DartConvertible;
 use serde::{Deserialize, Serialize};
-
 // Models
 
 #[derive(Serialize, Deserialize, Debug, Clone, DartConvertible)]

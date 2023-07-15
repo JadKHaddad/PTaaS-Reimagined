@@ -14,4 +14,7 @@ path = "../convertible_macros"
 optional = true
 default-features = false
 
-[dependencies]
+[dependencies.convertible_definitions]
+path = "../convertible_definitions"
+optional = false
+default-features = true

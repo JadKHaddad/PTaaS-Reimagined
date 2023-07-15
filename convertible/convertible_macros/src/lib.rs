@@ -1,3 +1,4 @@
+use convertible_definitions::dart::*;
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{parse_macro_input, DeriveInput};
@@ -8,7 +9,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
     let name = input.ident;
 
     let expanded = quote! {
-        impl convertible::DartConvertible for #name {
+        impl convertible::definitions::DartConvertible for #name {
             fn to_dart() -> &'static str {
                 r"
                 @JsonSerializable()

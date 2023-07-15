@@ -9,6 +9,7 @@ edition = "2021"
 proc-macro = true
 
 [dependencies]
+convertible_definitions = { path = "../convertible_definitions" }
 syn = { version= "1.0.107", features = ["full", "extra-traits"] }
 quote = "1.0.23"
 proc-macro2 = "1.0.49"

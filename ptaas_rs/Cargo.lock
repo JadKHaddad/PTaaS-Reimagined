@@ -86,13 +86,19 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 name = "convertible"
 version = "0.1.0"
 dependencies = [
+ "convertible_definitions",
  "convertible_macros",
 ]
+
+[[package]]
+name = "convertible_definitions"
+version = "0.1.0"
 
 [[package]]
 name = "convertible_macros"
 version = "0.1.0"
 dependencies = [
+ "convertible_definitions",
  "proc-macro2",
  "quote",
  "syn 1.0.109",

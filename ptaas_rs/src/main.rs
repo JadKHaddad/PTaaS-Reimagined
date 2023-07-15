@@ -1,4 +1,4 @@
-use convertible::{dart::*, DartConvertible};
+use convertible::definitions::{dart::*, DartConvertible};
 use ptaas_rs::{
     models_2::{print_dummies, Project},
     project_managers::{process::Status, LocalProjectManager, Process},
