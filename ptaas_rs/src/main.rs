@@ -52,7 +52,6 @@ async fn main() {
         Stdio::inherit(),
         true,
     )
-    .await
     .unwrap();
 
     tokio::time::sleep(Duration::from_secs(6)).await;

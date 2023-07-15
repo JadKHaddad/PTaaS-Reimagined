@@ -1,2 +1,2 @@
-pub mod local_project_manager;
+mod local_project_manager;
 pub use local_project_manager::LocalProjectManager;

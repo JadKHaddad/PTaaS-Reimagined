@@ -66,7 +66,7 @@ pub enum ProcessKillAndWaitError {
 
 /// Ensure calling `kill_and_wait_and_set_status` on the process before dropping it.
 impl Process {
-    pub async fn new<I, S, P, T>(
+    pub fn new<I, S, P, T>(
         given_id: Option<String>,
         program: S,
         args: I,
@@ -90,7 +90,7 @@ impl Process {
             .stderr(stderr)
             .kill_on_drop(kill_on_drop)
             .spawn()
-            .map_err(|e| ProcessCreateError::CouldNotCreateProcess(e))?;
+            .map_err(ProcessCreateError::CouldNotCreateProcess)?;
 
         Ok(Self {
             child,
@@ -119,7 +119,7 @@ impl Process {
         T: Into<Stdio>,
     {
         let given_id = Some(given_process_id.unwrap_or_else(|| String::from("`program_exists`")));
-        match Self::new(given_id, program, [], ".", stdin, stdout, stderr, true).await {
+        match Self::new(given_id, program, [], ".", stdin, stdout, stderr, true) {
             Ok(mut process) => {
                 // Filtering out `ErrorKind::PermissionDenied` on `kill_and_wait_and_set_status`,
                 // because the program could exit immediately after spawning.
@@ -146,8 +146,8 @@ impl Process {
             }
             Err(p_error) => match p_error {
                 ProcessCreateError::CouldNotCreateProcess(ref io_error) => match io_error.kind() {
-                    ErrorKind::NotFound => return Ok(false),
-                    _ => return Err(ProgramExistsError::CouldNotCreateProcess(p_error)),
+                    ErrorKind::NotFound => Ok(false),
+                    _ => Err(ProgramExistsError::CouldNotCreateProcess(p_error)),
                 },
             },
         }
@@ -157,24 +157,22 @@ impl Process {
     pub async fn kill_and_wait_and_set_status(&mut self) -> Result<(), ProcessKillAndWaitError> {
         self.kill()
             .await
-            .map_err(|error| ProcessKillAndWaitError::CouldNotKillProcess(error))?;
+            .map_err(ProcessKillAndWaitError::CouldNotKillProcess)?;
 
         self.wait_and_set_status()
             .await
-            .map_err(|error| ProcessKillAndWaitError::CouldNotWaitForProcess(error))
+            .map_err(ProcessKillAndWaitError::CouldNotWaitForProcess)
     }
 
     async fn kill(&mut self) -> Result<(), IoError> {
-        self.child.kill().await.and_then(|_| {
+        self.child.kill().await.map(|_| {
             self.child_killed_successfuly = true;
-            Ok(())
         })
     }
 
     async fn wait_and_set_status(&mut self) -> Result<(), IoError> {
-        self.child.wait().await.and_then(|ex_status| {
+        self.child.wait().await.map(|ex_status| {
             self.set_status_on_ex_status(ex_status);
-            Ok(())
         })
     }
 
@@ -208,7 +206,7 @@ impl Process {
     /// Tries to wait for the process and sets the status.
     /// The status will not be updated otherwise.
     pub fn status(&mut self) -> Result<&Status, IoError> {
-        self.child.try_wait().and_then(|option_ex_status| {
+        self.child.try_wait().map(|option_ex_status| {
             match option_ex_status {
                 Some(ex_status) => {
                     self.set_status_on_ex_status(ex_status);
@@ -217,7 +215,7 @@ impl Process {
                     self.status = Status::Running;
                 }
             }
-            Ok(&self.status)
+            &self.status
         })
     }
 

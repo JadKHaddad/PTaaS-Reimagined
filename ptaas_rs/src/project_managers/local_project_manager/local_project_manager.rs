@@ -17,12 +17,12 @@ impl LocalProjectManager {
     pub async fn new(root_dir: PathBuf) -> Result<Self, LocalProjectManagerCreateError> {
         if !fs::try_exists(&root_dir)
             .await
-            .map_err(|e| LocalProjectManagerCreateError::CouldNotCheckIfRootDirExists(e))?
+            .map_err(LocalProjectManagerCreateError::CouldNotCheckIfRootDirExists)?
         {
             tracing::info!(?root_dir, "Root dir does not exist, creating it");
             fs::create_dir_all(&root_dir)
                 .await
-                .map_err(|e| LocalProjectManagerCreateError::CouldNotCreateRootDir(e))?;
+                .map_err(LocalProjectManagerCreateError::CouldNotCreateRootDir)?;
         }
 
         Ok(Self { root_dir })
