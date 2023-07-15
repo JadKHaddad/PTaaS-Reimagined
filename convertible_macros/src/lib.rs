@@ -9,8 +9,11 @@ pub fn derive(input: TokenStream) -> TokenStream {
 
     let expanded = quote! {
         impl convertible::DartConvertible for #name {
-            fn to_dart(&self) -> &'static str {
-                "I am a dummy"
+            fn to_dart() -> &'static str {
+                r"
+                @JsonSerializable()
+                I am a dummy
+                "
             }
         }
     };

@@ -1,6 +1,5 @@
 #[cfg(feature = "derive")]
 pub mod macros;
 
-pub trait DartConvertible {
-    fn to_dart(&self) -> &'static str;
-}
+pub mod dart;
+pub use dart::DartConvertible;

@@ -1,5 +1,6 @@
+use convertible::{dart::*, DartConvertible};
 use ptaas_rs::{
-    models_2::print_dummies,
+    models_2::{print_dummies, Project},
     project_managers::{process::Status, LocalProjectManager, Process},
 };
 use std::{process::Stdio, time::Duration};
@@ -8,7 +9,89 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() {
-    print_dummies();
+    let project_in_dart = Project::to_dart();
+
+    let fields = vec![
+        DartField {
+            keywords: vec!["final".into()],
+            name: "id".into(),
+            type_: DartType::Class("String".into()),
+        },
+        DartField {
+            keywords: vec!["final".into()],
+            name: "installed".into(),
+            type_: DartType::Class("bool".into()),
+        },
+        DartField {
+            keywords: vec!["final".into()],
+            name: "scripts".into(),
+            type_: DartType::List("Script".into()),
+        },
+    ];
+
+    let cons_parameters = DartParameters::Named(vec![
+        NamedDartParameter::Required(DartParameter::ConstructorParameter(
+            DartConstructorParameter { name: "id".into() },
+        )),
+        NamedDartParameter::Required(DartParameter::ConstructorParameter(
+            DartConstructorParameter {
+                name: "installed".into(),
+            },
+        )),
+        NamedDartParameter::Required(DartParameter::ConstructorParameter(
+            DartConstructorParameter {
+                name: "scripts".into(),
+            },
+        )),
+    ]);
+
+    let constructor = DartConstructor::OneLiner(DartOnelineConstructor {
+        name: "Project".into(),
+        parameters: cons_parameters,
+    });
+
+    let factory_body = MethodBody::OneLiner(OnelineMethodBody {
+        name: "_$ProjectFromJson".into(),
+        parameters: vec!["json".into()],
+    });
+
+    let factory_params =
+        DartParameters::Positional(vec![DartParameter::MethodParameter(DartMethodParameter {
+            name: "json".into(),
+            type_: DartType::Map("String".into(), "dynamic".into()),
+        })]);
+
+    let factory = DartConstructor::Factory(DartFactoryConstructor::OneLiner(
+        DartOnelineFactoryConstructor {
+            class_name: "Project".into(),
+            name: "fromJson".into(),
+            parameters: factory_params,
+            body: factory_body,
+        },
+    ));
+
+    let to_json_method_params = DartParameters::Positional(vec![]);
+
+    let to_json_method_body = MethodBody::OneLiner(OnelineMethodBody {
+        name: "_$ProjectToJson".into(),
+        parameters: vec!["this".into()],
+    });
+
+    let to_json_method = DartMethod::OneLiner(DartOnelineMethod {
+        name: "toJson".into(),
+        type_: DartType::Map("String".into(), "dynamic".into()),
+        parameters: to_json_method_params,
+        body: to_json_method_body,
+    });
+
+    let dart_class = DartClass {
+        name: "Project".into(),
+        fields,
+        constructors: vec![constructor, factory],
+        methods: vec![to_json_method],
+    };
+
+    println!("{}", dart_class.to_string());
 
     std::process::exit(0);
 
