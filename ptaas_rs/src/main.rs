@@ -9,8 +9,6 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() {
-    let project_in_dart = Project::to_dart();
-
     let fields = vec![
         DartField {
             keywords: vec!["final".into()],
