@@ -104,6 +104,7 @@ impl Process {
         })
     }
 
+    // TODO: this whole function is a mess. We should know if a program exists or not without spawning a process.
     /// Spawns a process and kills it immediately after a successful spawn returning `true`.
     /// Returns `false`, if `ErrorKind::NotFound` is returned.
     /// Otherwise returns an error.
@@ -123,7 +124,13 @@ impl Process {
         let given_id = Some(given_process_id.unwrap_or_else(|| String::from("`program_exists`")));
         match Self::new(given_id, program, [], ".", stdin, stdout, stderr, true) {
             Ok(mut process) => {
+                // FIXME: can the process terminate ater we check the status and before we kill it?
                 process.check_status_and_kill_and_wait().await?;
+
+                // process
+                //     .wait_with_timeout_and_output(Duration::from_micros(1))
+                //     .await?;
+
                 Ok(true)
             }
             Err(p_error) => match p_error {
