@@ -104,44 +104,6 @@ impl Process {
         })
     }
 
-    // TODO: this whole function is a mess. We should know if a program exists or not without spawning a process.
-    /// Spawns a process and kills it immediately after a successful spawn returning `true`.
-    /// Returns `false`, if `ErrorKind::NotFound` is returned.
-    /// Otherwise returns an error.
-    /// An error does not necessarily mean that the program does not exist.
-    /// `Ok(true)` means that the program exists.
-    pub async fn program_exists<S, T>(
-        given_process_id: Option<String>,
-        program: S,
-        stdin: T,
-        stdout: T,
-        stderr: T,
-    ) -> Result<bool, ProgramExistsError>
-    where
-        S: AsRef<OsStr>,
-        T: Into<Stdio>,
-    {
-        let given_id = Some(given_process_id.unwrap_or_else(|| String::from("`program_exists`")));
-        match Self::new(given_id, program, [], ".", stdin, stdout, stderr, true) {
-            Ok(mut process) => {
-                // FIXME: can the process terminate ater we check the status and before we kill it?
-                process.check_status_and_kill_and_wait().await?;
-
-                // process
-                //     .wait_with_timeout_and_output(Duration::from_micros(1))
-                //     .await?;
-
-                Ok(true)
-            }
-            Err(p_error) => match p_error {
-                ProcessCreateError::CouldNotCreateProcess(ref io_error) => match io_error.kind() {
-                    ErrorKind::NotFound => Ok(false),
-                    _ => Err(ProgramExistsError::CouldNotCreateProcess(p_error)),
-                },
-            },
-        }
-    }
-
     async fn check_status_and_kill_and_wait(&mut self) -> Result<(), ProcessKillAndWaitError> {
         self.check_status_and_kill().await?;
         self.wait()
@@ -305,26 +267,7 @@ pub mod dev {
 
     use super::*;
     pub async fn program_exists(program: &str) {
-        match Process::program_exists(
-            Some(format!("does {program} exist")),
-            program,
-            Stdio::null(),
-            Stdio::null(),
-            Stdio::null(),
-        )
-        .await
-        {
-            Ok(exists) => {
-                if exists {
-                    tracing::info!(program, "program exists.");
-                } else {
-                    tracing::info!(program, "program does not exist.");
-                }
-            }
-            Err(error) => {
-                tracing::error!(%error, program, "Error checking if program exists.");
-            }
-        }
+        println!("{:?}", which::which(program));
     }
 
     fn create_numbers_process(stdout: Stdio) -> Result<Process, ProcessCreateError> {
@@ -528,6 +471,12 @@ pub mod dev {
 
     pub async fn run_all() {
         tracing::info!("Running all examples.");
+        tracing::info!("checking if python.exe exists.");
+        program_exists("python.exe").await;
+        tracing::info!("checking if python exists.");
+        program_exists("python").await;
+        tracing::info!("checking if someprogram.exe exists.");
+        program_exists("someprogram.exe").await;
         tracing::info!("Running numbers script and killing before termination.");
         run_numbers_script_and_kill_before_termination().await;
         tracing::info!("Running numbers script and killing after termination.");
@@ -540,9 +489,5 @@ pub mod dev {
         run_numbers_script_and_pipe_output_to_file("numbers.txt").await;
         tracing::info!("Running numbers script and piping output to console.");
         run_numbers_script_and_pipe_output_console().await;
-        tracing::info!("checking if python.exe exists.");
-        program_exists("python.exe").await;
-        tracing::info!("checking if someprogram.exe exists.");
-        program_exists("someprogram.exe").await;
     }
 }
