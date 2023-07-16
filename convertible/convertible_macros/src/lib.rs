@@ -33,16 +33,16 @@ pub fn derive(input: TokenStream) -> TokenStream {
         panic!("Only structs with named fields are supported");
     };
 
-    let fields: Vec<DartField> = fields
-        .iter()
-        .map(|field| {
-            let field_name = field.ident.as_ref().unwrap().to_string();
-            // Only Normal fields and Vec fields are supported for now
-            // Optional fields are supported by default
+    // let fields: Vec<DartField> = fields
+    //     .iter()
+    //     .map(|field| {
+    //         let field_name = field.ident.as_ref().unwrap().to_string();
+    //         // Only Normal fields and Vec fields are supported for now
+    //         // Optional fields are supported by default
 
-            todo!();
-        })
-        .collect();
+    //         todo!();
+    //     })
+    //     .collect();
 
     let expanded = quote! {
         impl convertible::definitions::DartConvertible for #name {
