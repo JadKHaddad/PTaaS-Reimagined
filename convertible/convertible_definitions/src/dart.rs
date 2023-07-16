@@ -44,6 +44,8 @@ impl ToString for DartClass {
     }
 }
 
+/// A dart field:
+/// final String? id;
 pub struct DartField {
     /// Final or const
     pub keywords: Vec<String>,
@@ -98,6 +100,8 @@ impl ToString for DartConstructor {
     }
 }
 
+/// A one line constructor:
+/// Project ({ required this.id, required this.installed, required this.scripts });
 pub struct DartOnelineConstructor {
     pub name: String,
     pub parameters: DartParameters,
@@ -109,6 +113,8 @@ impl ToString for DartOnelineConstructor {
     }
 }
 
+/// A factory constructor:
+/// factory Project.fromJson(Map<String, dynamic> json) => _$ProjectFromJson(json);
 pub enum DartFactoryConstructor {
     OneLiner(DartOnelineFactoryConstructor),
 }
@@ -153,6 +159,8 @@ impl ToString for DartMethod {
     }
 }
 
+/// A one line method:
+/// Map<String, dynamic> toJson() => _$ProjectToJson(this);
 pub struct DartOnelineMethod {
     pub name: String,
     pub type_: DartType,
@@ -184,6 +192,8 @@ impl ToString for MethodBody {
     }
 }
 
+/// A one line method body with no brackets:
+/// _$ProjectToJson(this)
 pub struct OnelineMethodBody {
     pub name: String,
     pub parameters: Vec<String>,
@@ -221,6 +231,8 @@ impl ToString for DartParameters {
     }
 }
 
+/// A named parameter:
+/// { id, required installed, required scripts }
 pub struct NamedDartParameter {
     /// Sets required keyword
     pub required: bool,
@@ -248,6 +260,8 @@ impl ToString for DartParameter {
     }
 }
 
+/// A constructor parameter:
+/// this.id
 pub struct DartConstructorParameter {
     pub name: String,
 }
@@ -258,6 +272,8 @@ impl ToString for DartConstructorParameter {
     }
 }
 
+/// A method parameter:
+/// String id
 pub struct DartMethodParameter {
     pub name: String,
     pub type_: DartType,
@@ -267,4 +283,97 @@ impl ToString for DartMethodParameter {
     fn to_string(&self) -> String {
         format!("{} {}", self.type_.to_string(), self.name)
     }
+}
+
+pub fn dev() {
+    let fields = vec![
+        DartField {
+            keywords: vec!["final".into()],
+            name: "id".into(),
+            type_: DartType::Primitive("String".into()),
+            optional: false,
+        },
+        DartField {
+            keywords: vec!["final".into()],
+            name: "installed".into(),
+            type_: DartType::Primitive("bool".into()),
+            optional: false,
+        },
+        DartField {
+            keywords: vec!["final".into()],
+            name: "scripts".into(),
+            type_: DartType::List("Script".into()),
+            optional: false,
+        },
+    ];
+
+    let cons_parameters = DartParameters::Named(vec![
+        NamedDartParameter {
+            required: true,
+            parameter: DartParameter::ConstructorParameter(DartConstructorParameter {
+                name: "id".into(),
+            }),
+        },
+        NamedDartParameter {
+            required: true,
+            parameter: DartParameter::ConstructorParameter(DartConstructorParameter {
+                name: "installed".into(),
+            }),
+        },
+        NamedDartParameter {
+            required: true,
+            parameter: DartParameter::ConstructorParameter(DartConstructorParameter {
+                name: "scripts".into(),
+            }),
+        },
+    ]);
+
+    let constructor = DartConstructor::OneLiner(DartOnelineConstructor {
+        name: "Project".into(),
+        parameters: cons_parameters,
+    });
+
+    let factory_body = MethodBody::OneLiner(OnelineMethodBody {
+        name: "_$ProjectFromJson".into(),
+        parameters: vec!["json".into()],
+    });
+
+    let factory_params =
+        DartParameters::Positional(vec![DartParameter::MethodParameter(DartMethodParameter {
+            name: "json".into(),
+            type_: DartType::Map("String".into(), "dynamic".into()),
+        })]);
+
+    let factory = DartConstructor::Factory(DartFactoryConstructor::OneLiner(
+        DartOnelineFactoryConstructor {
+            class_name: "Project".into(),
+            name: "fromJson".into(),
+            parameters: factory_params,
+            body: factory_body,
+        },
+    ));
+
+    let to_json_method_params = DartParameters::Positional(vec![]);
+
+    let to_json_method_body = MethodBody::OneLiner(OnelineMethodBody {
+        name: "_$ProjectToJson".into(),
+        parameters: vec!["this".into()],
+    });
+
+    let to_json_method = DartMethod::OneLiner(DartOnelineMethod {
+        name: "toJson".into(),
+        type_: DartType::Map("String".into(), "dynamic".into()),
+        parameters: to_json_method_params,
+        body: to_json_method_body,
+    });
+
+    let dart_class = DartClass {
+        decorators: vec!["@JsonSerializable()".into()],
+        name: "Project".into(),
+        fields,
+        constructors: vec![constructor, factory],
+        methods: vec![to_json_method],
+    };
+
+    println!("{}", dart_class.to_string());
 }

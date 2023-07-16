@@ -1,4 +1,4 @@
-use convertible::definitions::{dart::*, DartConvertible};
+use convertible::definitions::dart::dev as dart_dev;
 use ptaas_rs::{
     models_2::{print_dummies, Project},
     project_managers::{process::Status, LocalProjectManager, Process},
@@ -9,99 +9,6 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() {
-    let fields = vec![
-        DartField {
-            keywords: vec!["final".into()],
-            name: "id".into(),
-            type_: DartType::Primitive("String".into()),
-            optional: false,
-        },
-        DartField {
-            keywords: vec!["final".into()],
-            name: "installed".into(),
-            type_: DartType::Primitive("bool".into()),
-            optional: false,
-        },
-        DartField {
-            keywords: vec!["final".into()],
-            name: "scripts".into(),
-            type_: DartType::List("Script".into()),
-            optional: false,
-        },
-    ];
-
-    let cons_parameters = DartParameters::Named(vec![
-        NamedDartParameter {
-            required: true,
-            parameter: DartParameter::ConstructorParameter(DartConstructorParameter {
-                name: "id".into(),
-            }),
-        },
-        NamedDartParameter {
-            required: true,
-            parameter: DartParameter::ConstructorParameter(DartConstructorParameter {
-                name: "installed".into(),
-            }),
-        },
-        NamedDartParameter {
-            required: true,
-            parameter: DartParameter::ConstructorParameter(DartConstructorParameter {
-                name: "scripts".into(),
-            }),
-        },
-    ]);
-
-    let constructor = DartConstructor::OneLiner(DartOnelineConstructor {
-        name: "Project".into(),
-        parameters: cons_parameters,
-    });
-
-    let factory_body = MethodBody::OneLiner(OnelineMethodBody {
-        name: "_$ProjectFromJson".into(),
-        parameters: vec!["json".into()],
-    });
-
-    let factory_params =
-        DartParameters::Positional(vec![DartParameter::MethodParameter(DartMethodParameter {
-            name: "json".into(),
-            type_: DartType::Map("String".into(), "dynamic".into()),
-        })]);
-
-    let factory = DartConstructor::Factory(DartFactoryConstructor::OneLiner(
-        DartOnelineFactoryConstructor {
-            class_name: "Project".into(),
-            name: "fromJson".into(),
-            parameters: factory_params,
-            body: factory_body,
-        },
-    ));
-
-    let to_json_method_params = DartParameters::Positional(vec![]);
-
-    let to_json_method_body = MethodBody::OneLiner(OnelineMethodBody {
-        name: "_$ProjectToJson".into(),
-        parameters: vec!["this".into()],
-    });
-
-    let to_json_method = DartMethod::OneLiner(DartOnelineMethod {
-        name: "toJson".into(),
-        type_: DartType::Map("String".into(), "dynamic".into()),
-        parameters: to_json_method_params,
-        body: to_json_method_body,
-    });
-
-    let dart_class = DartClass {
-        decorators: vec!["@JsonSerializable()".into()],
-        name: "Project".into(),
-        fields,
-        constructors: vec![constructor, factory],
-        methods: vec![to_json_method],
-    };
-
-    println!("{}", dart_class.to_string());
-
-    std::process::exit(0);
-
     if std::env::var_os("RUST_LOG").is_none() {
         std::env::set_var("RUST_LOG", "ptaas_rs=trace,tower_http=off,hyper=off");
     }
@@ -113,82 +20,6 @@ async fn main() {
         .with_ansi(true)
         .with_env_filter(EnvFilter::from_default_env())
         .init();
-
-    let program = "python.exe";
-    match Process::program_exists(
-        Some("does python.exe exists".into()),
-        program,
-        Stdio::null(),
-        Stdio::null(),
-        Stdio::null(),
-    )
-    .await
-    {
-        Ok(exists) => {
-            if exists {
-                println!("{program} exists");
-            } else {
-                println!("{program} does not exist");
-            }
-        }
-        Err(error) => {
-            println!("Error: {}", error);
-        }
-    }
-
-    let mut p = Process::new(
-        Some("numbers.ps1".into()),
-        "powershell.exe",
-        vec!["./numbers.ps1"],
-        ".",
-        Stdio::inherit(),
-        Stdio::inherit(),
-        Stdio::inherit(),
-        true,
-    )
-    .unwrap();
-
-    tokio::time::sleep(Duration::from_secs(6)).await;
-    println!("{:?}", p.kill_and_wait_and_set_status().await);
-    println!("{:?}", p.status().unwrap());
-    println!("{:?}", p.status().unwrap());
-
-    // match p.wait_with_timeout_and_output(Duration::from_secs(6)).await {
-    //     Ok(_) => {}
-    //     Err(error) => {
-    //         println!("Error: {}", error);
-    //     }
-    // }
-
-    std::process::exit(0);
-    // let stdout = p.stdout();
-
-    // // Create a file to write the lines
-    // let mut file = tokio::fs::File::create("output.txt").await.unwrap();
-
-    // tokio::spawn(async move {
-    //     if let Some(stdout) = stdout {
-    //         let reader = io::BufReader::new(stdout);
-    //         let mut lines = reader.lines();
-    //         while let Ok(Some(line)) = lines.next_line().await {
-    //             println!("{}", line);
-    //             //file.write_all(line.as_bytes()).await.unwrap();
-    //             //file.write_all(b"\n").await.unwrap();
-    //         }
-    //     }
-    // });
-
-    // match p.status().unwrap() {
-    //     Status::Running => {
-    //         println!("Process is still running");
-    //         // p.kill_and_wait().await.unwrap();
-    //     }
-    //     _ => {
-    //         println!("Process is not running");
-    //     }
-    // }
-
-    print_dummies();
 
     let basic_auth_username = std::env::var("BASIC_AUTH_USERNAME").unwrap_or_else(|_| {
         tracing::warn!("BASIC_AUTH_USERNAME not set, using default value");
@@ -207,4 +38,7 @@ async fn main() {
             std::process::exit(1);
         }
     };
+
+    print_dummies();
+    dart_dev();
 }

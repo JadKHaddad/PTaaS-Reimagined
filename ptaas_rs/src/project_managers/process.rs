@@ -276,3 +276,78 @@ impl Drop for Process {
         }
     }
 }
+
+pub async fn dev() {
+    let program = "python.exe";
+    match Process::program_exists(
+        Some("does python.exe exists".into()),
+        program,
+        Stdio::null(),
+        Stdio::null(),
+        Stdio::null(),
+    )
+    .await
+    {
+        Ok(exists) => {
+            if exists {
+                println!("{program} exists");
+            } else {
+                println!("{program} does not exist");
+            }
+        }
+        Err(error) => {
+            println!("Error: {}", error);
+        }
+    }
+
+    let mut p = Process::new(
+        Some("numbers.ps1".into()),
+        "powershell.exe",
+        vec!["./numbers.ps1"],
+        ".",
+        Stdio::inherit(),
+        Stdio::inherit(),
+        Stdio::inherit(),
+        true,
+    )
+    .unwrap();
+
+    tokio::time::sleep(Duration::from_secs(6)).await;
+    println!("{:?}", p.kill_and_wait_and_set_status().await);
+    println!("{:?}", p.status().unwrap());
+    println!("{:?}", p.status().unwrap());
+
+    // match p.wait_with_timeout_and_output(Duration::from_secs(6)).await {
+    //     Ok(_) => {}
+    //     Err(error) => {
+    //         println!("Error: {}", error);
+    //     }
+    // }
+
+    // let stdout = p.stdout();
+
+    // // Create a file to write the lines
+    // let mut file = tokio::fs::File::create("output.txt").await.unwrap();
+
+    // tokio::spawn(async move {
+    //     if let Some(stdout) = stdout {
+    //         let reader = io::BufReader::new(stdout);
+    //         let mut lines = reader.lines();
+    //         while let Ok(Some(line)) = lines.next_line().await {
+    //             println!("{}", line);
+    //             //file.write_all(line.as_bytes()).await.unwrap();
+    //             //file.write_all(b"\n").await.unwrap();
+    //         }
+    //     }
+    // });
+
+    // match p.status().unwrap() {
+    //     Status::Running => {
+    //         println!("Process is still running");
+    //         // p.kill_and_wait().await.unwrap();
+    //     }
+    //     _ => {
+    //         println!("Process is not running");
+    //     }
+    // }
+}
