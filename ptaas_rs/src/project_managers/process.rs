@@ -34,7 +34,7 @@ pub struct Process {
     kill_on_drop: bool,
 }
 
-/// Used to in the constructor of `Process` to pass arguments, to improve readability.
+/// Used in the constructor of `Process` to pass arguments, to improve readability.
 #[derive(Debug)]
 pub struct NewProcessArgs<I, S, P, T> {
     pub given_id: Option<String>,
@@ -51,22 +51,6 @@ pub struct NewProcessArgs<I, S, P, T> {
 pub enum ProcessCreateError {
     #[error("Could not create process: {0}")]
     CouldNotCreateProcess(#[source] IoError),
-}
-#[derive(ThisError, Debug)]
-pub enum ProgramExistsError {
-    #[error("Could not create process: {0}")]
-    CouldNotCreateProcess(
-        #[source]
-        #[from]
-        ProcessCreateError,
-    ),
-
-    #[error("Could not kill and wait for process: {0}")]
-    ProcessKillAndWaitError(
-        #[source]
-        #[from]
-        ProcessKillAndWaitError,
-    ),
 }
 
 #[derive(ThisError, Debug)]
