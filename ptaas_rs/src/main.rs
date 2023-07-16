@@ -1,18 +1,8 @@
 use convertible::definitions::dart::dev as dart_dev;
 use ptaas_rs::{
-    models_2::{print_dummies, Project},
-    project_managers::{
-        process::{
-            dev::{
-                run_all as run_process_dev_examples, run_numbers_script_and_pipe_output_to_file,
-            },
-            Status,
-        },
-        LocalProjectManager, Process,
-    },
+    models_2::print_dummies,
+    project_managers::{process::dev::run_all as run_process_dev_examples, LocalProjectManager},
 };
-use std::{process::Stdio, time::Duration};
-use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -49,6 +39,5 @@ async fn main() {
 
     print_dummies();
     dart_dev();
-    //run_numbers_script_and_pipe_output_to_file("numbers.txt").await;
     run_process_dev_examples().await;
 }

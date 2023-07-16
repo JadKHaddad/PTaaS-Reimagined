@@ -123,26 +123,11 @@ impl Process {
         let given_id = Some(given_process_id.unwrap_or_else(|| String::from("`program_exists`")));
         match Self::new(given_id, program, [], ".", stdin, stdout, stderr, true) {
             Ok(mut process) => {
-                // Filtering out `ErrorKind::PermissionDenied` on `kill_and_wait_and_set_status`,
-                // because the program could exit immediately after spawning.
+                process.check_status_and_kill().await?;
 
-                /*
-                process
-                    .kill_and_wait_and_set_status()
-                    .await
-                    .or_else(|error| {
-                        if let ProcessKillAndWaitError::CouldNotKillProcess(ref io_error) = error {
-                            if let ErrorKind::PermissionDenied = io_error.kind() {
-                                return Ok(());
-                            }
-                        }
-                        return Err(error);
-                    })?;
-                */
-
-                process
-                    .wait_with_timeout_and_output(Duration::from_micros(1))
-                    .await?;
+                // process
+                //     .wait_with_timeout_and_output(Duration::from_micros(1))
+                //     .await?;
 
                 Ok(true)
             }
@@ -155,10 +140,8 @@ impl Process {
         }
     }
 
-    /// Kill may fail if the process has already exited.
-    pub async fn check_status_and_kill_and_wait_and_set_status(
-        &mut self,
-    ) -> Result<(), ProcessKillAndWaitError> {
+    /// Will only attempt to kill the process if it is running.
+    async fn check_status_and_kill(&mut self) -> Result<(), ProcessKillAndWaitError> {
         let status = self
             .status()
             .map_err(ProcessKillAndWaitError::CouldNotCheckStatus)?;
@@ -178,6 +161,13 @@ impl Process {
             }
         }
 
+        Ok(())
+    }
+
+    pub async fn check_status_and_kill_and_wait_and_set_status(
+        &mut self,
+    ) -> Result<(), ProcessKillAndWaitError> {
+        self.check_status_and_kill().await?;
         self.wait_and_set_status()
             .await
             .map_err(ProcessKillAndWaitError::CouldNotWaitForProcess)
