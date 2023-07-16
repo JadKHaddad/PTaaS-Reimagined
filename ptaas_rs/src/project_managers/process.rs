@@ -123,12 +123,7 @@ impl Process {
         let given_id = Some(given_process_id.unwrap_or_else(|| String::from("`program_exists`")));
         match Self::new(given_id, program, [], ".", stdin, stdout, stderr, true) {
             Ok(mut process) => {
-                process.check_status_and_kill().await?;
-
-                // process
-                //     .wait_with_timeout_and_output(Duration::from_micros(1))
-                //     .await?;
-
+                process.check_status_and_kill_and_wait().await?;
                 Ok(true)
             }
             Err(p_error) => match p_error {
@@ -138,6 +133,14 @@ impl Process {
                 },
             },
         }
+    }
+
+    async fn check_status_and_kill_and_wait(&mut self) -> Result<(), ProcessKillAndWaitError> {
+        self.check_status_and_kill().await?;
+        self.wait()
+            .await
+            .map(|_| ())
+            .map_err(ProcessKillAndWaitError::CouldNotWaitForProcess)
     }
 
     /// Will only attempt to kill the process if it is running.
@@ -179,8 +182,12 @@ impl Process {
         })
     }
 
+    async fn wait(&mut self) -> Result<ExitStatus, IoError> {
+        self.child.wait().await
+    }
+
     async fn wait_and_set_status(&mut self) -> Result<(), IoError> {
-        self.child.wait().await.map(|ex_status| {
+        self.wait().await.map(|ex_status| {
             self.set_status_on_ex_status(ex_status);
         })
     }
@@ -232,7 +239,7 @@ impl Process {
     /// If you want to use these values, use the returned `Output` instead.
     /// Depending on tokio's implementation of `select!`,
     /// it should not be possible to kill the process after it has terminated.
-    pub async fn wait_with_timeout_and_output(
+    pub async fn wait_with_timeout_and_output_and_set_status(
         &mut self,
         duration: Duration,
     ) -> Result<Output, ProcessKillAndWaitError> {
@@ -390,7 +397,10 @@ pub mod dev {
                 return;
             }
         };
-        match p.wait_with_timeout_and_output(Duration::from_secs(2)).await {
+        match p
+            .wait_with_timeout_and_output_and_set_status(Duration::from_secs(2))
+            .await
+        {
             Ok(output) => {
                 tracing::info!(
                     id = p.id(),
@@ -419,7 +429,7 @@ pub mod dev {
             }
         };
         match p
-            .wait_with_timeout_and_output(Duration::from_secs(10))
+            .wait_with_timeout_and_output_and_set_status(Duration::from_secs(10))
             .await
         {
             Ok(output) => {
@@ -479,7 +489,7 @@ pub mod dev {
         });
 
         let _ = p
-            .wait_with_timeout_and_output(Duration::from_secs(10))
+            .wait_with_timeout_and_output_and_set_status(Duration::from_secs(10))
             .await;
     }
 
@@ -505,7 +515,7 @@ pub mod dev {
         });
 
         let _ = p
-            .wait_with_timeout_and_output(Duration::from_secs(10))
+            .wait_with_timeout_and_output_and_set_status(Duration::from_secs(10))
             .await;
     }
 
