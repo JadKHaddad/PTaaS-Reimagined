@@ -1,6 +1,6 @@
 use std::{
     ffi::OsStr,
-    io::{Error as IoError, ErrorKind},
+    io::Error as IoError,
     path::Path,
     process::{ExitStatus, Stdio},
     time::Duration,
@@ -32,6 +32,19 @@ pub struct Process {
     child_terminated_and_awaited_successfuly: bool,
     child_killed_successfuly: bool,
     kill_on_drop: bool,
+}
+
+/// Used to in the constructor of `Process` to pass arguments, to improve readability.
+#[derive(Debug)]
+pub struct NewProcessArgs<I, S, P, T> {
+    pub given_id: Option<String>,
+    pub program: S,
+    pub args: I,
+    pub current_dir: P,
+    pub stdin: T,
+    pub stdout: T,
+    pub stderr: T,
+    pub kill_on_drop: bool,
 }
 
 #[derive(ThisError, Debug)]
@@ -66,17 +79,10 @@ pub enum ProcessKillAndWaitError {
     CouldNotWaitForProcess(#[source] IoError),
 }
 
-/// Ensure calling `kill_and_wait_and_set_status` on the process before dropping it.
+/// Ensure killing the process before dropping it.
 impl Process {
     pub fn new<I, S, P, T>(
-        given_id: Option<String>,
-        program: S,
-        args: I,
-        current_dir: P,
-        stdin: T,
-        stdout: T,
-        stderr: T,
-        kill_on_drop: bool,
+        new_process_args: NewProcessArgs<I, S, P, T>,
     ) -> Result<Self, ProcessCreateError>
     where
         I: IntoIterator<Item = S>,
@@ -84,26 +90,27 @@ impl Process {
         P: AsRef<Path>,
         T: Into<Stdio>,
     {
-        let child = Command::new(program)
-            .args(args)
-            .current_dir(current_dir)
-            .stdin(stdin)
-            .stdout(stdout)
-            .stderr(stderr)
-            .kill_on_drop(kill_on_drop)
+        let child = Command::new(new_process_args.program)
+            .args(new_process_args.args)
+            .current_dir(new_process_args.current_dir)
+            .stdin(new_process_args.stdin)
+            .stdout(new_process_args.stdout)
+            .stderr(new_process_args.stderr)
+            .kill_on_drop(new_process_args.kill_on_drop)
             .spawn()
             .map_err(ProcessCreateError::CouldNotCreateProcess)?;
 
         Ok(Self {
             child,
-            given_id,
+            given_id: new_process_args.given_id,
             status: Status::Running,
             child_terminated_and_awaited_successfuly: false,
             child_killed_successfuly: false,
-            kill_on_drop,
+            kill_on_drop: new_process_args.kill_on_drop,
         })
     }
 
+    #[allow(dead_code)]
     async fn check_status_and_kill_and_wait(&mut self) -> Result<(), ProcessKillAndWaitError> {
         self.check_status_and_kill().await?;
         self.wait()
@@ -161,7 +168,7 @@ impl Process {
         })
     }
 
-    /// Maybe useful if 'kill_and_wait_and_set_status' fails with 'CouldNotKillProcess' error.
+    /// Maybe useful if killing the process using `kill` failes.
     pub fn start_kill(&mut self) -> Result<(), IoError> {
         tracing::warn!(
             id = self.id(),
@@ -271,16 +278,17 @@ pub mod dev {
     }
 
     fn create_numbers_process(stdout: Stdio) -> Result<Process, ProcessCreateError> {
-        Process::new(
-            Some("numbers.ps1".into()),
-            "powershell.exe",
-            vec!["./numbers.ps1"],
-            ".",
-            Stdio::inherit(),
+        let args = NewProcessArgs {
+            given_id: Some("numbers.ps1".into()),
+            program: "powershell.exe",
+            args: vec!["./numbers.ps1"],
+            current_dir: ".",
+            stdin: Stdio::inherit(),
             stdout,
-            Stdio::inherit(),
-            true,
-        )
+            stderr: Stdio::inherit(),
+            kill_on_drop: true,
+        };
+        Process::new(args)
     }
 
     pub async fn run_numbers_script_and_kill_before_termination() {
