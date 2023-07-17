@@ -79,12 +79,12 @@ fn extract_type_if_exists<'a>(ty: &'a syn::Type, types: &[&str]) -> Option<&'a s
             .collect::<Vec<_>>()
             .join(":");
 
-        let option_segment = types
+        let wrapper_segment = types
             .iter()
             .find(|s| segments_str == *s)
             .and_then(|_| path.segments.last());
 
-        let inner_type = option_segment
+        let inner_type = wrapper_segment
             .and_then(|path_seg| match &path_seg.arguments {
                 syn::PathArguments::AngleBracketed(syn::AngleBracketedGenericArguments {
                     args,
