@@ -1,18 +1,75 @@
-// use std::vec;
-
-//use convertible_definitions::dart::*;
+use convertible_definitions::dart::*;
 use proc_macro::TokenStream;
-use quote::quote;
+use quote::{quote, ToTokens};
 use syn::{parse_macro_input, DeriveInput};
 
-#[derive(Debug)]
-struct FieldNameAndType {
-    name: String,
-    ty: String,
-    optional: bool,
+fn create_serde_dart_class(fields: Vec<DartField>, class_name: String) -> DartClass {
+    let constructor_parameters = DartParameters::Named(
+        fields
+            .iter()
+            .map(|field| NamedDartParameter {
+                required: true,
+                parameter: DartParameter::ConstructorParameter(DartConstructorParameter {
+                    name: field.name.clone(),
+                }),
+            })
+            .collect(),
+    );
+
+    let constructor = DartConstructor::OneLiner(DartOnelineConstructor {
+        name: class_name.clone(),
+        parameters: constructor_parameters,
+    });
+
+    let factory_body = MethodBody::OneLiner(OnelineMethodBody {
+        name: format!("_${}FromJson", class_name),
+        parameters: vec![String::from("json")],
+    });
+
+    let factory_params =
+        DartParameters::Positional(vec![DartParameter::MethodParameter(DartMethodParameter {
+            name: String::from("json"),
+            type_: DartType::Map(String::from("String"), String::from("dynamic")),
+        })]);
+
+    let factory = DartConstructor::Factory(DartFactoryConstructor::OneLiner(
+        DartOnelineFactoryConstructor {
+            class_name: class_name.clone(),
+            name: String::from("fromJson"),
+            parameters: factory_params,
+            body: factory_body,
+        },
+    ));
+
+    let to_json_method_params = DartParameters::Positional(vec![]);
+
+    let to_json_method_body = MethodBody::OneLiner(OnelineMethodBody {
+        name: format!("_${}ToJson", class_name),
+        parameters: vec![String::from("this")],
+    });
+
+    let to_json_method = DartMethod::OneLiner(DartOnelineMethod {
+        name: String::from("toJson"),
+        type_: DartType::Map(String::from("String"), String::from("dynamic")),
+        parameters: to_json_method_params,
+        body: to_json_method_body,
+    });
+
+    DartClass {
+        decorators: vec![String::from("@JsonSerializable()")],
+        name: class_name,
+        fields,
+        constructors: vec![constructor, factory],
+        methods: vec![to_json_method],
+    }
 }
 
-fn extract_type<'a>(ty: &'a syn::Type, types: &[&str]) -> Option<&'a syn::Type> {
+/// Checks if the type is a wrapper type like Option or Vec
+/// and returns the inner type.
+/// If the type is not a wrapper type, it returns None.
+/// For Option: ["Option", "std:option:Option", "core:option:Option"].
+/// For Vec: ["Vec", "std:vec:Vec", "core:vec:Vec"].
+fn extract_type_if_exists<'a>(ty: &'a syn::Type, types: &[&str]) -> Option<&'a syn::Type> {
     if let syn::Type::Path(syn::TypePath { qself: None, path }) = ty {
         let segments_str = &path
             .segments
@@ -44,10 +101,6 @@ fn extract_type<'a>(ty: &'a syn::Type, types: &[&str]) -> Option<&'a syn::Type> 
 }
 
 fn is_simple_segment(segment: &syn::PathSegment) -> bool {
-    let simple_types = [
-        "String", "bool", "u8", "i8", "u16", "i16", "u32", "i32", "u64", "i64", "u128", "i128",
-        "usize", "isize",
-    ];
     let not_simple_types = [
         "Vec",
         "std::vec::Vec",
@@ -74,9 +127,7 @@ fn is_simple_segment(segment: &syn::PathSegment) -> bool {
         "core::option::Option",
         "Option",
     ];
-
     let segment_ident = segment.ident.to_string();
-    //simple_types.contains(&segment_ident.as_str())
     !not_simple_types.contains(&segment_ident.as_str())
 }
 
@@ -99,28 +150,14 @@ pub fn derive(input: TokenStream) -> TokenStream {
     println!("struct_name: {}", struct_name);
 
     let mut is_struct = false;
-    let mut is_enum = false;
+    let mut _is_enum = false;
 
     match input.data {
         syn::Data::Struct(_) => is_struct = true,
-        syn::Data::Enum(_) => is_enum = true,
+        syn::Data::Enum(_) => _is_enum = true,
         _ => panic!("Only structs and enums are supported"),
     };
 
-    println!("is_struct: {}", is_struct);
-    println!("is_enum: {}", is_enum);
-
-    // let is_struct = match input.data {
-    //     syn::Data::Struct(_) => true,
-    //     _ => false,
-    // };
-
-    // // TODO: enums are also supported but not implemented yet
-    // if !is_struct {
-    //     panic!("Only structs are supported");
-    // }
-
-    // let decorators: Vec<String> = vec!["@JsonSerializable()".into()];
     if is_struct {
         // lets collect the fields of the struct
         let fields = if let syn::Data::Struct(syn::DataStruct {
@@ -134,42 +171,31 @@ pub fn derive(input: TokenStream) -> TokenStream {
         };
 
         // now lets extract the name and type of each field
-        let fields: Vec<FieldNameAndType> = fields
+        let dart_fields: Vec<DartField> = fields
             .iter()
             .map(|field| {
-                let field_name = field.ident.as_ref().unwrap().to_string();
+                // TODO: rework!
+                let field_name = field
+                    .ident
+                    .as_ref()
+                    .expect("Field name not found")
+                    .to_string();
                 // Only Normal fields and Vec fields are supported for now
                 // Optional fields are supported by default
-                println!("field_name: {}", field_name);
 
+                // this is a simple field, just take it
                 if is_simple_type(&field.ty) {
-                    return FieldNameAndType {
+                    let ty_string = &field.ty.to_token_stream().to_string();
+                    return DartField {
+                        keywords: vec![String::from("final")],
                         name: field_name,
-                        ty: field.ident.as_ref().unwrap().to_string(),
+                        type_: DartType::Primitive(rust_primitive_to_dart_primitive(ty_string)),
                         optional: false,
                     };
                 }
 
-                // see if its an optional field
-                if let Some(inner_type) = extract_type(
-                    &field.ty,
-                    &["Option", "std:option:Option", "core:option:Option"],
-                ) {
-                    if !is_simple_type(inner_type) {
-                        panic!("Only simple types are supported for now");
-                    }
-
-                    // TODO: inside the option we will allow our simple types or vec but not other option for example
-
-                    return FieldNameAndType {
-                        name: field_name,
-                        ty: field.ident.as_ref().unwrap().to_string(),
-                        optional: true,
-                    };
-                };
-
                 // see if its a Vec field
-                if let Some(inner_type) = extract_type(
+                if let Some(inner_type) = extract_type_if_exists(
                     &field.ty,
                     &[
                         "Vec",
@@ -179,15 +205,73 @@ pub fn derive(input: TokenStream) -> TokenStream {
                         "core:vec:vec",
                     ],
                 ) {
+                    // now this is a Vec. lets check the inner type!
                     if !is_simple_type(inner_type) {
-                        panic!("Only simple types are supported for now");
+                        panic!(
+                            "Only simple types are supported for now inside a Vec [{}]",
+                            field_name
+                        );
                     }
 
-                    return FieldNameAndType {
+                    let ty_string = inner_type.to_token_stream().to_string();
+                    return DartField {
+                        keywords: vec![String::from("final")],
                         name: field_name,
-                        ty: field.ident.as_ref().unwrap().to_string(),
+                        type_: DartType::List(rust_primitive_to_dart_primitive(&ty_string)),
                         optional: false,
                     };
+                };
+
+                // see if its an optional field
+                if let Some(inner_type) = extract_type_if_exists(
+                    &field.ty,
+                    &["Option", "std:option:Option", "core:option:Option"],
+                ) {
+                    // now this is optional. lets check the inner type!
+                    let ty_string = inner_type.to_token_stream().to_string();
+                    if is_simple_type(inner_type) {
+                        return DartField {
+                            keywords: vec![String::from("final")],
+                            name: field_name,
+                            type_: DartType::Primitive(rust_primitive_to_dart_primitive(
+                                &ty_string,
+                            )),
+                            optional: true,
+                        };
+                    }
+
+                    // see if its a Vec field inside the Option
+                    if let Some(inner_type) = extract_type_if_exists(
+                        inner_type,
+                        &[
+                            "Vec",
+                            "std:vec:Vec",
+                            "core:vec:Vec",
+                            "std:vec:vec",
+                            "core:vec:vec",
+                        ],
+                    ) {
+                        // now this is a Vec inside an Option. lets check the inner type of the Vec!
+                        if !is_simple_type(inner_type) {
+                            panic!(
+                                "Only simple types are supported for now inside a Vec [{}]",
+                                field_name
+                            );
+                        }
+
+                        let ty_string = inner_type.to_token_stream().to_string();
+                        return DartField {
+                            keywords: vec![String::from("final")],
+                            name: field_name,
+                            type_: DartType::List(rust_primitive_to_dart_primitive(&ty_string)),
+                            optional: true,
+                        };
+                    };
+
+                    panic!(
+                        "Only simple types and Vec fields are supported for now inside a Vec [{}]",
+                        field_name
+                    );
                 };
 
                 panic!(
@@ -197,26 +281,26 @@ pub fn derive(input: TokenStream) -> TokenStream {
             })
             .collect();
 
-        println!("fields: {:?}", fields);
+        // println!("dart_fields: {:#?}", dart_fields);
+
+        let dart_code = create_serde_dart_class(dart_fields, struct_name.to_string()).to_string();
+
+        let expanded = quote! {
+            impl convertible::definitions::DartConvertible for #struct_name {
+                fn to_dart() -> &'static str {
+                    #dart_code
+                }
+            }
+        };
+
+        return expanded.into();
     }
-
-    // let fields: Vec<DartField> = fields
-    //     .iter()
-    //     .map(|field| {
-    //         let field_name = field.ident.as_ref().unwrap().to_string();
-    //         // Only Normal fields and Vec fields are supported for now
-    //         // Optional fields are supported by default
-
-    //         todo!();
-    //     })
-    //     .collect();
 
     let expanded = quote! {
         impl convertible::definitions::DartConvertible for #struct_name {
             fn to_dart() -> &'static str {
                 r"
-                @JsonSerializable()
-                I am a dummy
+                Not implemented yet
                 "
             }
         }

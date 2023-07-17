@@ -3,6 +3,7 @@ pub trait DartConvertible {
 }
 
 /// Overkilling a simple task, As simple as creating a template file and replacing some placeholders :)
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DartClass {
     /// @JsonSerializable() a list of Strings for now
     pub decorators: Vec<String>,
@@ -46,6 +47,7 @@ impl ToString for DartClass {
 
 /// A dart field:
 /// final String? id;
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DartField {
     /// Final or const
     pub keywords: Vec<String>,
@@ -69,11 +71,34 @@ impl ToString for DartField {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DartType {
     /// Every type as a string
     Primitive(String),
     List(String),
     Map(String, String),
+}
+
+pub fn rust_primitive_to_dart_primitive(ty: &str) -> String {
+    match ty {
+        "String" => "String".to_string(),
+        "bool" => "bool".to_string(),
+        "i8" => "int".to_string(),
+        "i16" => "int".to_string(),
+        "i32" => "int".to_string(),
+        "i64" => "int".to_string(),
+        "i128" => "int".to_string(),
+        "isize" => "int".to_string(),
+        "u8" => "int".to_string(),
+        "u16" => "int".to_string(),
+        "u32" => "int".to_string(),
+        "u64" => "int".to_string(),
+        "u128" => "int".to_string(),
+        "usize" => "int".to_string(),
+        "f32" => "double".to_string(),
+        "f64" => "double".to_string(),
+        _ => ty.to_string(),
+    }
 }
 
 impl ToString for DartType {
@@ -86,6 +111,7 @@ impl ToString for DartType {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DartConstructor {
     OneLiner(DartOnelineConstructor),
     Factory(DartFactoryConstructor),
@@ -102,6 +128,7 @@ impl ToString for DartConstructor {
 
 /// A one line constructor:
 /// Project ({ required this.id, required this.installed, required this.scripts });
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DartOnelineConstructor {
     pub name: String,
     pub parameters: DartParameters,
@@ -115,6 +142,7 @@ impl ToString for DartOnelineConstructor {
 
 /// A factory constructor:
 /// factory Project.fromJson(Map<String, dynamic> json) => _$ProjectFromJson(json);
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DartFactoryConstructor {
     OneLiner(DartOnelineFactoryConstructor),
 }
@@ -127,6 +155,7 @@ impl ToString for DartFactoryConstructor {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DartOnelineFactoryConstructor {
     pub class_name: String,
     pub name: String,
@@ -147,6 +176,7 @@ impl ToString for DartOnelineFactoryConstructor {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DartMethod {
     OneLiner(DartOnelineMethod),
 }
@@ -161,6 +191,7 @@ impl ToString for DartMethod {
 
 /// A one line method:
 /// Map<String, dynamic> toJson() => _$ProjectToJson(this);
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DartOnelineMethod {
     pub name: String,
     pub type_: DartType,
@@ -180,6 +211,7 @@ impl ToString for DartOnelineMethod {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum MethodBody {
     OneLiner(OnelineMethodBody),
 }
@@ -194,6 +226,7 @@ impl ToString for MethodBody {
 
 /// A one line method body with no brackets:
 /// _$ProjectToJson(this)
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct OnelineMethodBody {
     pub name: String,
     pub parameters: Vec<String>,
@@ -206,6 +239,7 @@ impl ToString for OnelineMethodBody {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DartParameters {
     Named(Vec<NamedDartParameter>),
     Positional(Vec<DartParameter>),
@@ -233,6 +267,7 @@ impl ToString for DartParameters {
 
 /// A named parameter:
 /// { id, required installed, required scripts }
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct NamedDartParameter {
     /// Sets required keyword
     pub required: bool,
@@ -246,6 +281,7 @@ impl ToString for NamedDartParameter {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DartParameter {
     ConstructorParameter(DartConstructorParameter),
     MethodParameter(DartMethodParameter),
@@ -262,6 +298,7 @@ impl ToString for DartParameter {
 
 /// A constructor parameter:
 /// this.id
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DartConstructorParameter {
     pub name: String,
 }
@@ -274,6 +311,7 @@ impl ToString for DartConstructorParameter {
 
 /// A method parameter:
 /// String id
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DartMethodParameter {
     pub name: String,
     pub type_: DartType,
