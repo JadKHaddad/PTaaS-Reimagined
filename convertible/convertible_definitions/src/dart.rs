@@ -2,6 +2,37 @@ pub trait DartConvertible {
     fn to_dart() -> &'static str;
 }
 
+pub struct DartFactory {
+    class_code: String,
+}
+
+impl DartFactory {
+    #[must_use]
+    pub fn new(file_name: &str) -> Self {
+        let class_code = format!(
+            r#"
+import 'package:json_annotation/json_annotation.dart';
+
+part '{file_name}.g.dart';
+
+// this is a generated file, do not modify by hand.
+// to build serialization and deserialization code run:
+// dart run build_runner build
+        "#
+        );
+        Self { class_code }
+    }
+
+    pub fn add<T: DartConvertible>(mut self) -> Self {
+        self.class_code.push_str(&format!("\n{}\n", T::to_dart()));
+        self
+    }
+
+    pub fn build(self) -> String {
+        self.class_code
+    }
+}
+
 /// Overkilling a simple task, As simple as creating a template file and replacing some placeholders :)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DartClass {

@@ -169,7 +169,6 @@ pub fn derive(input: TokenStream) -> TokenStream {
             panic!("Only structs with named fields are supported");
         };
 
-        // now lets extract the name and type of each field
         let dart_fields: Vec<DartField> = fields
             .iter()
             .map(|field| {

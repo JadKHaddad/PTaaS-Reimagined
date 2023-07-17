@@ -1,8 +1,6 @@
-use convertible::{
-    definitions::DartConvertible, macros::DartConvertible as DartConvertibleDeriveMacro,
-};
+use convertible::{definitions::dart::DartFactory, macros::DartConvertible};
 
-#[derive(DartConvertibleDeriveMacro)]
+#[derive(DartConvertible)]
 pub struct Project {
     pub id: String,
     pub installed: bool,
@@ -10,12 +8,16 @@ pub struct Project {
     pub optional_id: Option<Vec<String>>,
 }
 
-#[derive(DartConvertibleDeriveMacro)]
+#[derive(DartConvertible)]
 pub struct Script {
     pub id: String,
 }
 
 fn main() {
-    println!("{}", Project::to_dart());
-    println!("{}", Script::to_dart());
+    let dart_code = DartFactory::new("models")
+        .add::<Project>()
+        .add::<Script>()
+        .build();
+
+    println!("{}", dart_code);
 }
