@@ -1,6 +1,6 @@
 use convertible::macros::DartConvertible;
 use std::collections::HashMap;
-#[derive(DartConvertible)]
+//#[derive(DartConvertible)]
 pub struct Project {
     pub id: String,
     pub installed: bool,

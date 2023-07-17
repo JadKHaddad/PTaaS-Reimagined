@@ -1,0 +1,9 @@
+[workspace]
+
+members = [
+    "convertible/convertible",
+    "convertible/convertible_definitions",
+    "convertible/convertible_macros",
+    "convertible_macros_dev",
+    "ptaas_rs"
+]
