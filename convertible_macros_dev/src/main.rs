@@ -7,7 +7,7 @@ pub struct Project {
     pub id: String,
     pub installed: bool,
     pub scripts: Vec<Script>,
-    pub optional_id: Option<String>,
+    pub optional_id: Option<Vec<String>>,
 }
 
 #[derive(DartConvertibleDeriveMacro)]

@@ -1,3 +1,4 @@
+use convert_case::{Case, Casing};
 use convertible_definitions::dart::*;
 use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
@@ -147,8 +148,6 @@ pub fn derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let struct_name = input.ident;
 
-    println!("struct_name: {}", struct_name);
-
     let mut is_struct = false;
     let mut _is_enum = false;
 
@@ -180,23 +179,36 @@ pub fn derive(input: TokenStream) -> TokenStream {
                     .as_ref()
                     .expect("Field name not found")
                     .to_string();
+
                 // Only Normal fields and Vec fields are supported for now
                 // Optional fields are supported by default
 
+                let mut ty = &field.ty.clone();
+                let mut optional = false;
+
+                // see if its an optional field
+                if let Some(inner_type) = extract_type_if_exists(
+                    ty,
+                    &["Option", "std:option:Option", "core:option:Option"],
+                ) {
+                    optional = true;
+                    ty = inner_type;
+                }
+
                 // this is a simple field, just take it
-                if is_simple_type(&field.ty) {
-                    let ty_string = &field.ty.to_token_stream().to_string();
+                if is_simple_type(ty) {
+                    let ty_string = ty.to_token_stream().to_string();
                     return DartField {
                         keywords: vec![String::from("final")],
-                        name: field_name,
-                        type_: DartType::Primitive(rust_primitive_to_dart_primitive(ty_string)),
-                        optional: false,
+                        name: field_name.to_case(Case::Camel),
+                        type_: DartType::Primitive(rust_primitive_to_dart_primitive(&ty_string)),
+                        optional,
                     };
                 }
 
                 // see if its a Vec field
                 if let Some(inner_type) = extract_type_if_exists(
-                    &field.ty,
+                    ty,
                     &[
                         "Vec",
                         "std:vec:Vec",
@@ -208,7 +220,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
                     // now this is a Vec. lets check the inner type!
                     if !is_simple_type(inner_type) {
                         panic!(
-                            "Only simple types are supported for now inside a Vec [{}]",
+                            "[{}] Only simple types are supported inside a Vec",
                             field_name
                         );
                     }
@@ -216,66 +228,14 @@ pub fn derive(input: TokenStream) -> TokenStream {
                     let ty_string = inner_type.to_token_stream().to_string();
                     return DartField {
                         keywords: vec![String::from("final")],
-                        name: field_name,
+                        name: field_name.to_case(Case::Camel),
                         type_: DartType::List(rust_primitive_to_dart_primitive(&ty_string)),
-                        optional: false,
+                        optional,
                     };
-                };
-
-                // see if its an optional field
-                if let Some(inner_type) = extract_type_if_exists(
-                    &field.ty,
-                    &["Option", "std:option:Option", "core:option:Option"],
-                ) {
-                    // now this is optional. lets check the inner type!
-                    let ty_string = inner_type.to_token_stream().to_string();
-                    if is_simple_type(inner_type) {
-                        return DartField {
-                            keywords: vec![String::from("final")],
-                            name: field_name,
-                            type_: DartType::Primitive(rust_primitive_to_dart_primitive(
-                                &ty_string,
-                            )),
-                            optional: true,
-                        };
-                    }
-
-                    // see if its a Vec field inside the Option
-                    if let Some(inner_type) = extract_type_if_exists(
-                        inner_type,
-                        &[
-                            "Vec",
-                            "std:vec:Vec",
-                            "core:vec:Vec",
-                            "std:vec:vec",
-                            "core:vec:vec",
-                        ],
-                    ) {
-                        // now this is a Vec inside an Option. lets check the inner type of the Vec!
-                        if !is_simple_type(inner_type) {
-                            panic!(
-                                "Only simple types are supported for now inside a Vec [{}]",
-                                field_name
-                            );
-                        }
-
-                        let ty_string = inner_type.to_token_stream().to_string();
-                        return DartField {
-                            keywords: vec![String::from("final")],
-                            name: field_name,
-                            type_: DartType::List(rust_primitive_to_dart_primitive(&ty_string)),
-                            optional: true,
-                        };
-                    };
-
-                    panic!(
-                        "Only simple types and Vec fields are supported for now inside a Vec [{}]",
-                        field_name
-                    );
                 };
 
                 panic!(
-                    "Only simple types and Vec fields are supported for now [{}]",
+                    "[{}] Only simple types and Vec fields are supported",
                     field_name
                 );
             })
