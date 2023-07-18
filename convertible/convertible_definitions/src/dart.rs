@@ -354,6 +354,27 @@ impl ToString for DartMethodParameter {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DartEnum {
+    pub name: String,
+    pub values: Vec<String>,
+}
+
+impl ToString for DartEnum {
+    fn to_string(&self) -> String {
+        let values = self.values.join(", ");
+        format!(
+            "enum {} {{\n{}\n}}",
+            self.name,
+            values
+                .lines()
+                .map(|line| format!("  {}", line))
+                .collect::<Vec<String>>()
+                .join("\n")
+        )
+    }
+}
+
 pub fn dev() {
     let fields = vec![
         DartField {

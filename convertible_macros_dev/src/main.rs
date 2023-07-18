@@ -1,3 +1,4 @@
+use convertible::definitions::dart::DartConvertible as Trait;
 use convertible::{definitions::dart::DartFactory, macros::DartConvertible};
 
 #[derive(DartConvertible)]
@@ -13,11 +14,33 @@ pub struct Script {
     pub id: String,
 }
 
+#[derive(DartConvertible)]
+pub enum MyEnum {
+    WakaA,
+    BcbData,
+}
+
+#[derive(DartConvertible)]
+pub enum MyEnum2 {
+    A(Script),
+    B(Project),
+}
+
+#[derive(DartConvertible)]
+pub enum MyEnum3 {
+    A(Script),
+    B(Project),
+}
+
 fn main() {
     let dart_code = DartFactory::new("models")
         .add::<Project>()
         .add::<Script>()
+        .add::<MyEnum>()
         .build();
 
     println!("{}", dart_code);
+
+    //println!("{}", MyEnum::to_dart());
+    //println!("{}", MyEnum2::to_dart());
 }
