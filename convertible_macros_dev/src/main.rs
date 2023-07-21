@@ -29,7 +29,7 @@ pub enum MyEnum2 {
 #[derive(DartConvertible)]
 pub enum MyEnum3 {
     A(Script),
-    B(Project),
+    B(Script),
 }
 
 fn main() {
@@ -37,6 +37,8 @@ fn main() {
         .add::<Project>()
         .add::<Script>()
         .add::<MyEnum>()
+        .add::<MyEnum2>()
+        .add::<MyEnum3>()
         .build();
 
     println!("{}", dart_code);

@@ -2,7 +2,34 @@ use convert_case::{Case, Casing};
 use convertible_definitions::dart::*;
 use proc_macro::TokenStream;
 use quote::{quote, ToTokens};
-use syn::{parse_macro_input, DeriveInput, Field, Ident};
+use syn::{parse_macro_input, DeriveInput, Field, Ident, PathSegment, Type};
+
+const NOT_SIMPLE_TYPES: [&str; 24] = [
+    "Vec",
+    "std::vec::Vec",
+    "core::vec::Vec",
+    "LinkedList",
+    "std::collections::LinkedList",
+    "core::collections::LinkedList",
+    "BinaryHeap",
+    "std::collections::BinaryHeap",
+    "core::collections::BinaryHeap",
+    "HashSet",
+    "std::collections::HashSet",
+    "core::collections::HashSet",
+    "BTreeSet",
+    "std::collections::BTreeSet",
+    "core::collections::BTreeSet",
+    "HashMap",
+    "std::collections::HashMap",
+    "core::collections::HashMap",
+    "BTreeMap",
+    "std::collections::BTreeMap",
+    "core::collections::BTreeMap",
+    "std::option::Option",
+    "core::option::Option",
+    "Option",
+];
 
 fn create_serde_dart_class(fields: Vec<DartField>, class_name: String) -> DartClass {
     let constructor_parameters = DartParameters::Named(
@@ -70,7 +97,7 @@ fn create_serde_dart_class(fields: Vec<DartField>, class_name: String) -> DartCl
 /// If the type is not a wrapper type, it returns None.
 /// For Option: ["Option", "std:option:Option", "core:option:Option"].
 /// For Vec: ["Vec", "std:vec:Vec", "core:vec:Vec"].
-fn extract_type_if_exists<'a>(ty: &'a syn::Type, types: &[&str]) -> Option<&'a syn::Type> {
+fn extract_type_if_exists<'a>(ty: &'a Type, types: &[&str]) -> Option<&'a Type> {
     if let syn::Type::Path(syn::TypePath { qself: None, path }) = ty {
         let segments_str = &path
             .segments
@@ -101,35 +128,26 @@ fn extract_type_if_exists<'a>(ty: &'a syn::Type, types: &[&str]) -> Option<&'a s
     None
 }
 
-fn is_simple_segment(segment: &syn::PathSegment) -> bool {
-    let not_simple_types = [
-        "Vec",
-        "std::vec::Vec",
-        "core::vec::Vec",
-        "LinkedList",
-        "std::collections::LinkedList",
-        "core::collections::LinkedList",
-        "BinaryHeap",
-        "std::collections::BinaryHeap",
-        "core::collections::BinaryHeap",
-        "HashSet",
-        "std::collections::HashSet",
-        "core::collections::HashSet",
-        "BTreeSet",
-        "std::collections::BTreeSet",
-        "core::collections::BTreeSet",
-        "HashMap",
-        "std::collections::HashMap",
-        "core::collections::HashMap",
-        "BTreeMap",
-        "std::collections::BTreeMap",
-        "core::collections::BTreeMap",
-        "std::option::Option",
-        "core::option::Option",
-        "Option",
-    ];
+fn extract_type_from_vec_if_exists(ty: &Type) -> Option<&Type> {
+    extract_type_if_exists(
+        ty,
+        &[
+            "Vec",
+            "std:vec:Vec",
+            "core:vec:Vec",
+            "std:vec:vec",
+            "core:vec:vec",
+        ],
+    )
+}
+
+fn extract_type_from_option_if_exists(ty: &Type) -> Option<&Type> {
+    extract_type_if_exists(ty, &["Option", "std:option:Option", "core:option:Option"])
+}
+
+fn is_simple_segment(segment: &PathSegment) -> bool {
     let segment_ident = segment.ident.to_string();
-    !not_simple_types.contains(&segment_ident.as_str())
+    !NOT_SIMPLE_TYPES.contains(&segment_ident.as_str())
 }
 
 fn is_simple_type(ty: &syn::Type) -> bool {
@@ -143,131 +161,101 @@ fn is_simple_type(ty: &syn::Type) -> bool {
     }
 }
 
+struct NameAndType {
+    name: String,
+    ty: Option<syn::Type>,
+}
+
 #[proc_macro_derive(DartConvertible, attributes(dart_convertible))]
 pub fn derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    let struct_name = input.ident;
-
-    let mut is_struct = false;
-    let mut is_enum = false;
+    let struct_name = &input.ident;
 
     match input.data {
-        syn::Data::Struct(_) => is_struct = true,
-        syn::Data::Enum(_) => is_enum = true,
+        syn::Data::Struct(_) => derive_from_struct(&input, struct_name),
+        syn::Data::Enum(_) => derive_from_enum(&input, struct_name),
         _ => panic!("Only structs and enums are supported"),
-    };
-
-    if is_struct {
-        // lets collect the fields of the struct
-        let fields = if let syn::Data::Struct(syn::DataStruct {
-            fields: syn::Fields::Named(syn::FieldsNamed { ref named, .. }),
-            ..
-        }) = input.data
-        {
-            named
-        } else {
-            panic!("Only structs with named fields are supported");
-        };
-
-        let fields: Vec<&Field> = fields.iter().collect();
-
-        return derive_class(struct_name, fields);
     }
-
-    if is_enum {
-        // lets collect the variants of the enum
-        // if all variants are unit variants, we can derive a simple enum
-        // if all variants are tuple variants with one field, we can derive a class
-        // otherwise we can't derive anything!
-
-        let variants = if let syn::Data::Enum(syn::DataEnum { ref variants, .. }) = input.data {
-            variants
-        } else {
-            panic!("Only enums are supported");
-        };
-
-        let mut unit_found = false;
-        let mut tuple_found = false;
-
-        let mut variants_names_and_types: Vec<(String, String)> = Vec::new();
-
-        for variant in variants {
-            match variant.fields {
-                syn::Fields::Unit => {
-                    unit_found = true;
-
-                    variants_names_and_types.push((variant.ident.to_string(), String::new()));
-                }
-                syn::Fields::Unnamed(syn::FieldsUnnamed { ref unnamed, .. }) => {
-                    tuple_found = true;
-                    if unnamed.len() != 1 {
-                        panic!("Only enums with one tuple variant are supported");
-                    }
-
-                    let field = &unnamed[0];
-                    let ty = &field.ty;
-
-                    variants_names_and_types
-                        .push((variant.ident.to_string(), quote!(#ty).to_string()));
-                }
-                _ => {
-                    panic!("Only enums with unit variants or one tuple variant are supported");
-                }
-            }
-        }
-
-        if unit_found && tuple_found {
-            panic!("Inconsistent enum definition. What am I supposed to do with this?");
-        }
-
-        if unit_found {
-            let dart_enum = DartEnum {
-                name: struct_name.to_string(),
-                values: variants_names_and_types
-                    .into_iter()
-                    .map(|(name, _)| name.to_case(Case::Camel))
-                    .collect(),
-            };
-
-            let dart_code = dart_enum.to_string();
-
-            let expanded = quote! {
-
-                impl convertible::definitions::DartConvertible for #struct_name {
-                    fn to_dart() -> &'static str {
-                        #dart_code
-                    }
-                }
-            };
-
-            return expanded.into();
-        }
-
-        if tuple_found {
-            let expanded = quote! {
-                impl convertible::definitions::DartConvertible for #struct_name {
-                    fn to_dart() -> &'static str {
-                        r"
-                        Class!
-                        "
-                    }
-                }
-            };
-
-            return expanded.into();
-        }
-
-        panic!("Only enums with unit variants or one tuple variant are supported");
-    }
-
-    panic!("Only enums with unit variants or structs with named fields are supported");
 }
 
-fn derive_class(struct_name: Ident, fields: Vec<&Field>) -> TokenStream {
+fn derive_from_struct(input: &DeriveInput, struct_name: &Ident) -> TokenStream {
+    // lets collect the fields of the struct
+    let fields = if let syn::Data::Struct(syn::DataStruct {
+        fields: syn::Fields::Named(syn::FieldsNamed { ref named, .. }),
+        ..
+    }) = input.data
+    {
+        named
+    } else {
+        panic!("Only structs with named fields are supported");
+    };
+
+    let fields: Vec<&Field> = fields.iter().collect();
+
+    derive_class_from_struct(struct_name, fields)
+}
+
+fn derive_from_enum(input: &DeriveInput, struct_name: &Ident) -> TokenStream {
+    // lets collect the variants of the enum
+    // if all variants are unit variants, we can derive a simple enum
+    // if all variants are tuple variants with one field, we can derive a class
+    // otherwise we can't derive anything!
+
+    let variants = if let syn::Data::Enum(syn::DataEnum { ref variants, .. }) = input.data {
+        variants
+    } else {
+        panic!("Only enums are supported");
+    };
+
+    let mut unit_found = false;
+    let mut tuple_found = false;
+
+    let mut variants_names_and_types: Vec<NameAndType> = Vec::new();
+
+    for variant in variants {
+        match variant.fields {
+            syn::Fields::Unit => {
+                unit_found = true;
+
+                variants_names_and_types.push(NameAndType {
+                    name: variant.ident.to_string(),
+                    ty: None,
+                });
+            }
+            syn::Fields::Unnamed(syn::FieldsUnnamed { ref unnamed, .. }) => {
+                tuple_found = true;
+                if unnamed.len() != 1 {
+                    panic!("Only enums with one tuple variant are supported");
+                }
+
+                let field = &unnamed[0];
+                let ty = &field.ty;
+
+                variants_names_and_types.push(NameAndType {
+                    name: variant.ident.to_string(),
+                    ty: Some(ty.clone()),
+                });
+            }
+            _ => {
+                panic!("Only enums with unit variants or one tuple variant are supported");
+            }
+        }
+    }
+
+    match (unit_found, tuple_found) {
+        (true, false) => derive_enum_from_enum(struct_name, variants_names_and_types),
+        (false, true) => derive_class_from_enum(struct_name, variants_names_and_types),
+        (false, false) => {
+            panic!("Only enums with unit variants or one tuple variant are supported")
+        }
+        (true, true) => panic!("Inconsistent enum definition. What am I supposed to do with this?"),
+    }
+}
+
+fn derive_class_from_struct(struct_name: &Ident, fields: Vec<&Field>) -> TokenStream {
     let dart_fields: Vec<DartField> = fields
         .iter()
         .map(|field| {
-            // TODO: rework!
             let field_name = field
                 .ident
                 .as_ref()
@@ -281,9 +269,7 @@ fn derive_class(struct_name: Ident, fields: Vec<&Field>) -> TokenStream {
             let mut optional = false;
 
             // see if its an optional field
-            if let Some(inner_type) =
-                extract_type_if_exists(ty, &["Option", "std:option:Option", "core:option:Option"])
-            {
+            if let Some(inner_type) = extract_type_from_option_if_exists(ty) {
                 optional = true;
                 ty = inner_type;
             }
@@ -300,16 +286,7 @@ fn derive_class(struct_name: Ident, fields: Vec<&Field>) -> TokenStream {
             }
 
             // see if its a Vec field
-            if let Some(inner_type) = extract_type_if_exists(
-                ty,
-                &[
-                    "Vec",
-                    "std:vec:Vec",
-                    "core:vec:Vec",
-                    "std:vec:vec",
-                    "core:vec:vec",
-                ],
-            ) {
+            if let Some(inner_type) = extract_type_from_vec_if_exists(ty) {
                 // now this is a Vec. lets check the inner type!
                 if !is_simple_type(inner_type) {
                     panic!(
@@ -334,7 +311,91 @@ fn derive_class(struct_name: Ident, fields: Vec<&Field>) -> TokenStream {
         })
         .collect();
 
-    // println!("dart_fields: {:#?}", dart_fields);
+    let dart_code = create_serde_dart_class(dart_fields, struct_name.to_string()).to_string();
+
+    let expanded = quote! {
+        impl convertible::definitions::DartConvertible for #struct_name {
+            fn to_dart() -> &'static str {
+                #dart_code
+            }
+        }
+    };
+
+    expanded.into()
+}
+
+fn derive_enum_from_enum(
+    struct_name: &Ident,
+    variants_names_and_types: Vec<NameAndType>,
+) -> TokenStream {
+    let dart_enum = DartEnum {
+        name: struct_name.to_string(),
+        values: variants_names_and_types
+            .into_iter()
+            .map(|name_and_type| name_and_type.name.to_case(Case::Camel))
+            .collect(),
+    };
+
+    let dart_code = dart_enum.to_string();
+
+    let expanded = quote! {
+
+        impl convertible::definitions::DartConvertible for #struct_name {
+            fn to_dart() -> &'static str {
+                #dart_code
+            }
+        }
+    };
+
+    expanded.into()
+}
+
+fn derive_class_from_enum(
+    struct_name: &Ident,
+    variants_names_and_types: Vec<NameAndType>,
+) -> TokenStream {
+    let dart_fields: Vec<DartField> = variants_names_and_types
+        .iter()
+        .map(|name_and_type| {
+            let ty = name_and_type.ty.as_ref().expect("Bad macro input");
+            // every field in an enum is optional!
+
+            // this is a simple field, just take it
+            if is_simple_type(ty) {
+                let ty_string = ty.to_token_stream().to_string();
+                return DartField {
+                    keywords: vec![String::from("final")],
+                    name: name_and_type.name.to_case(Case::Camel),
+                    type_: DartType::Primitive(rust_primitive_to_dart_primitive(&ty_string)),
+                    optional: true,
+                };
+            }
+
+            // see if its a Vec field
+            if let Some(inner_type) = extract_type_from_vec_if_exists(ty) {
+                // now this is a Vec. lets check the inner type!
+                if !is_simple_type(inner_type) {
+                    panic!(
+                        "[{}] Only simple types are supported inside a Vec",
+                        name_and_type.name
+                    );
+                }
+
+                let ty_string = inner_type.to_token_stream().to_string();
+                return DartField {
+                    keywords: vec![String::from("final")],
+                    name: name_and_type.name.to_case(Case::Camel),
+                    type_: DartType::List(rust_primitive_to_dart_primitive(&ty_string)),
+                    optional: true,
+                };
+            };
+
+            panic!(
+                "[{}] Only simple types and Vec fields are supported",
+                name_and_type.name
+            );
+        })
+        .collect();
 
     let dart_code = create_serde_dart_class(dart_fields, struct_name.to_string()).to_string();
 
