@@ -1,6 +1,7 @@
-use std::path::PathBuf;
+use std::{io::Error as IoError, path::PathBuf};
 use thiserror::Error as ThisError;
 use tokio::fs;
+
 pub struct LocalProjectManager {
     root_dir: PathBuf,
 }
@@ -8,9 +9,9 @@ pub struct LocalProjectManager {
 #[derive(ThisError, Debug)]
 pub enum LocalProjectManagerCreateError {
     #[error("Could not check if root dir exists: {0}")]
-    CouldNotCheckIfRootDirExists(#[source] std::io::Error),
+    CouldNotCheckIfRootDirExists(#[source] IoError),
     #[error("Could not create root dir: {0}")]
-    CouldNotCreateRootDir(#[source] std::io::Error),
+    CouldNotCreateRootDir(#[source] IoError),
 }
 
 impl LocalProjectManager {
