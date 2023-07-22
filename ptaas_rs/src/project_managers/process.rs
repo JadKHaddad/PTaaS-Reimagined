@@ -220,6 +220,15 @@ impl Process {
         })
     }
 
+    pub async fn wait_with_output_and_set_status(&mut self) -> Result<Output, IoError> {
+        self.wait_and_set_status().await?;
+        Ok(Output {
+            status: self.status.clone(),
+            stdout: self.stdout(),
+            stderr: self.stderr(),
+        })
+    }
+
     pub fn id(&self) -> Option<u32> {
         self.child.id()
     }

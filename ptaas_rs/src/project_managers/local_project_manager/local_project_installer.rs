@@ -1,7 +1,11 @@
-use std::{io::Error as IoError, path::PathBuf, process::Stdio};
+use std::{
+    io::Error as IoError,
+    path::{Path, PathBuf},
+    process::Stdio,
+};
 
 use crate::project_managers::{
-    process::{NewProcessArgs, ProcessCreateError, Status},
+    process::{NewProcessArgs, Output, ProcessCreateError, ProcessKillAndWaitError, Status},
     Process,
 };
 use thiserror::Error as ThisError;
@@ -40,35 +44,94 @@ impl LocalProjectInstaller {
         self.process.status()
     }
 
+    pub async fn stop(&mut self) -> Result<(), ProcessKillAndWaitError> {
+        self.process
+            .check_status_and_kill_and_wait_and_set_status()
+            .await
+    }
+
+    async fn wait_process_with_output(&mut self) -> Result<Output, IoError> {
+        self.process.wait_with_output_and_set_status().await
+    }
+
     /// Checks if the project is valid and starts the installation process in the background.
     async fn check_and_start_install(
         new_local_project_installer_args: &NewLocalProjectInstallerArgs,
     ) -> Result<Process, StartInstallError> {
         Self::check(new_local_project_installer_args).await?;
 
-        let new_process_args = if cfg!(target_os = "windows") {
-            let project_env_dir_str = new_local_project_installer_args
-                .project_env_dir
+        let uploaded_project_dir = &new_local_project_installer_args.uploaded_project_dir;
+
+        let project_env_dir = &new_local_project_installer_args.project_env_dir;
+        let project_env_dir_str =
+            project_env_dir
                 .to_str()
                 .ok_or(StartInstallError::FailedToConvertPathBufToString(
                     new_local_project_installer_args.project_env_dir.clone(),
                 ))?;
 
-            NewProcessArgs {
+        let requirements_file_path = Self::get_requirements_file_path(uploaded_project_dir);
+        let requirements_file_path_str = requirements_file_path.to_str().ok_or(
+            StartInstallError::FailedToConvertPathBufToString(requirements_file_path.clone()),
+        )?;
+
+        let new_process = if cfg!(target_os = "windows") {
+            let pip_path = project_env_dir.join("Scripts").join("pip3");
+            let pip_path_str =
+                pip_path
+                    .to_str()
+                    .ok_or(StartInstallError::FailedToConvertPathBufToString(
+                        pip_path.clone(),
+                    ))?;
+
+            let new_process_args = NewProcessArgs {
                 given_id: None,
                 program: "cmd",
-                args: vec!["/C", "python", "-m", "venv", project_env_dir_str],
+                args: vec![
+                    "/C",
+                    "python",
+                    "-m",
+                    "venv",
+                    project_env_dir_str,
+                    "&&",
+                    pip_path_str,
+                    "install",
+                    "-r",
+                    requirements_file_path_str,
+                ],
                 current_dir: ".",
                 stdin: Stdio::inherit(),
                 stdout: Stdio::inherit(),
                 stderr: Stdio::inherit(),
                 kill_on_drop: true,
-            }
+            };
+
+            Process::new(new_process_args)?
         } else {
             todo!();
         };
 
-        Ok(Process::new(new_process_args)?)
+        Ok(new_process)
+    }
+
+    async fn delete_environment_dir_if_exists(&self) -> Result<(), IoError> {
+        if fs::try_exists(&self.project_env_dir).await? {
+            self.delete_environment_dir().await?;
+        }
+
+        Ok(())
+    }
+
+    async fn delete_environment_dir(&self) -> Result<(), IoError> {
+        fs::remove_dir_all(&self.project_env_dir).await
+    }
+
+    fn get_requirements_file_path(uploaded_project_dir: &Path) -> PathBuf {
+        uploaded_project_dir.join("requirements.txt")
+    }
+
+    fn get_locust_dir_path(uploaded_project_dir: &Path) -> PathBuf {
+        uploaded_project_dir.join("locust")
     }
 
     /// A 'check' function fails if the project is not valid.
@@ -82,12 +145,12 @@ impl LocalProjectInstaller {
             .await
             .map_err(|err| ProjectCheckError::ProjectDirError(err.into()))?;
 
-        let requirements_file_path = uploaded_project_dir.join("requirements.txt");
+        let requirements_file_path = Self::get_requirements_file_path(uploaded_project_dir);
 
         Self::check_requirements_txt_exists_and_locust_in_requirements_txt(&requirements_file_path)
             .await?;
 
-        let locust_dir_path = uploaded_project_dir.join("locust");
+        let locust_dir_path = Self::get_locust_dir_path(uploaded_project_dir);
 
         Self::check_locust_dir_exists_and_not_empty_and_contains_python_scripts(&locust_dir_path)
             .await
@@ -291,20 +354,20 @@ mod tests {
 
     const CRATE_DIR: &str = env!("CARGO_MANIFEST_DIR");
 
+    fn get_tests_dir() -> PathBuf {
+        Path::new(CRATE_DIR).join("tests_dir")
+    }
+
     fn get_uploaded_projects_dir() -> PathBuf {
-        Path::new(CRATE_DIR)
-            .join("tests_dir")
-            .join("uploaded_projects")
+        get_tests_dir().join("uploaded_projects")
     }
 
     fn get_installed_projects_dir() -> PathBuf {
-        Path::new(CRATE_DIR)
-            .join("tests_dir")
-            .join("installed_projects")
+        get_tests_dir().join("installed_projects")
     }
 
     fn get_environments_dir() -> PathBuf {
-        Path::new(CRATE_DIR).join("tests_dir").join("environments")
+        get_tests_dir().join("environments")
     }
 
     mod check_projects {
@@ -442,6 +505,113 @@ mod tests {
                 Err(err) => {
                     panic!("Unexpected error: {}", err);
                 }
+            }
+        }
+    }
+
+    mod install_projects {
+        use super::*;
+
+        #[tokio::test]
+        pub async fn invalid_requirements() {
+            let uploaded_project_dir = get_uploaded_projects_dir().join("invalid_requirements");
+            let installed_project_dir = get_installed_projects_dir().join("invalid_requirements");
+            let project_env_dir = get_environments_dir().join("invalid_requirements");
+
+            let installer_args = NewLocalProjectInstallerArgs {
+                uploaded_project_dir,
+                installed_project_dir,
+                project_env_dir,
+            };
+
+            let mut installer = LocalProjectInstaller::new(installer_args)
+                .await
+                .expect("Installation process failed to start");
+
+            let output = installer
+                .wait_process_with_output()
+                .await
+                .expect("Wait failed");
+
+            installer
+                .delete_environment_dir_if_exists()
+                .await
+                .expect("Could not delete environment dir");
+
+            match output.status {
+                Status::TerminatedWithError(_) => {}
+                _ => panic!("Unexpected status: {:?}", output.status),
+            }
+        }
+
+        #[tokio::test]
+        pub async fn killed() {
+            let uploaded_project_dir = get_uploaded_projects_dir().join("valid");
+            let installed_project_dir = get_installed_projects_dir().join("valid");
+            let project_env_dir = get_environments_dir().join("valid");
+
+            let installer_args = NewLocalProjectInstallerArgs {
+                uploaded_project_dir,
+                installed_project_dir,
+                project_env_dir,
+            };
+
+            let mut installer = LocalProjectInstaller::new(installer_args)
+                .await
+                .expect("Installation process failed to start");
+
+            installer
+                .stop()
+                .await
+                .expect("Could not stop installation process");
+
+            let output = installer
+                .wait_process_with_output()
+                .await
+                .expect("Wait failed");
+
+            installer
+                .delete_environment_dir_if_exists()
+                .await
+                .expect("Could not delete environment dir");
+
+            match output.status {
+                Status::TerminatedWithUnknownError => if cfg!(target_os = "linux") {},
+                Status::TerminatedWithError(_) => if cfg!(target_os = "windows") {},
+                Status::TerminatedSuccessfully => panic!("Unexpected status: {:?}", output.status),
+                _ => panic!("Uncovered case"),
+            }
+        }
+
+        #[tokio::test]
+        pub async fn valid() {
+            let uploaded_project_dir = get_uploaded_projects_dir().join("valid");
+            let installed_project_dir = get_installed_projects_dir().join("valid");
+            let project_env_dir = get_environments_dir().join("valid");
+
+            let installer_args = NewLocalProjectInstallerArgs {
+                uploaded_project_dir,
+                installed_project_dir,
+                project_env_dir,
+            };
+
+            let mut installer = LocalProjectInstaller::new(installer_args)
+                .await
+                .expect("Installation process failed to start");
+
+            let output = installer
+                .wait_process_with_output()
+                .await
+                .expect("Wait failed");
+
+            installer
+                .delete_environment_dir_if_exists()
+                .await
+                .expect("Could not delete environment dir");
+
+            match output.status {
+                Status::TerminatedSuccessfully => {}
+                _ => panic!("Unexpected status: {:?}", output.status),
             }
         }
     }
