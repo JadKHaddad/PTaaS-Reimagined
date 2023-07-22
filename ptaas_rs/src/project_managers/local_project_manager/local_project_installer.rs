@@ -5,7 +5,7 @@ use crate::project_managers::{
     Process,
 };
 use thiserror::Error as ThisError;
-use tokio::fs;
+use tokio::fs::{self, ReadDir};
 
 #[derive(Debug)]
 pub struct NewLocalProjectInstallerArgs {
@@ -35,10 +35,12 @@ impl LocalProjectInstaller {
         })
     }
 
+    /// Returns the status of the underlying process, not the status of the installation.
     pub fn process_status(&mut self) -> Result<&Status, IoError> {
         self.process.status()
     }
 
+    /// Checks if the project is valid and starts the installation process in the background.
     async fn check_and_start_install(
         new_local_project_installer_args: &NewLocalProjectInstallerArgs,
     ) -> Result<Process, StartInstallError> {
@@ -69,36 +71,34 @@ impl LocalProjectInstaller {
         Ok(Process::new(new_process_args)?)
     }
 
+    /// A 'check' function fails if the project is not valid.
+    /// Otherwise it returns Ok(()).
     async fn check(
         new_local_project_installer_args: &NewLocalProjectInstallerArgs,
     ) -> Result<(), ProjectCheckError> {
-        Self::check_dir_exists_and_not_empty(
-            &new_local_project_installer_args.uploaded_project_dir,
-        )
-        .await
-        .map_err(|err| ProjectCheckError::ProjectDirError(err.into()))?;
+        let uploaded_project_dir = &new_local_project_installer_args.uploaded_project_dir;
 
-        let requirements_file_path = new_local_project_installer_args
-            .uploaded_project_dir
-            .join("requirements.txt");
+        let _ = Self::check_dir_exists_and_not_empty(uploaded_project_dir)
+            .await
+            .map_err(|err| ProjectCheckError::ProjectDirError(err.into()))?;
+
+        let requirements_file_path = uploaded_project_dir.join("requirements.txt");
 
         Self::check_requirements_txt_exists_and_locust_in_requirements_txt(&requirements_file_path)
             .await?;
 
-        let locust_dir_path = new_local_project_installer_args
-            .uploaded_project_dir
-            .join("locust");
+        let locust_dir_path = uploaded_project_dir.join("locust");
 
-        Self::check_dir_exists_and_not_empty(&locust_dir_path)
+        Self::check_locust_dir_exists_and_not_empty_and_contains_python_scripts(&locust_dir_path)
             .await
-            .map_err(|err| ProjectCheckError::LocustDirError(err.into()))?;
+            .map_err(ProjectCheckError::LocustDirError)?;
 
         Ok(())
     }
 
     async fn check_dir_exists_and_not_empty(
         dir: &PathBuf,
-    ) -> Result<(), DirExistsAndNotEmptyError> {
+    ) -> Result<ReadDir, DirExistsAndNotEmptyError> {
         if !fs::try_exists(dir)
             .await
             .map_err(DirExistsAndNotEmptyError::CouldNotCheckIfDirExists)?
@@ -119,7 +119,25 @@ impl LocalProjectInstaller {
             return Err(DirExistsAndNotEmptyError::DirIsEmpty);
         }
 
-        Ok(())
+        Ok(dir_content)
+    }
+
+    async fn check_locust_dir_exists_and_not_empty_and_contains_python_scripts(
+        dir: &PathBuf,
+    ) -> Result<(), LocustDirError> {
+        let mut dir_content = Self::check_dir_exists_and_not_empty(dir).await?;
+
+        while let Some(entry) = dir_content
+            .next_entry()
+            .await
+            .map_err(LocustDirError::CouldNotIterateOverLocustDir)?
+        {
+            if let Some("py") = entry.path().extension().and_then(|ext| ext.to_str()) {
+                return Ok(());
+            }
+        }
+
+        Err(LocustDirError::NoPythonFilesInLocustDir)
     }
 
     async fn check_requirements_txt_exists_and_locust_in_requirements_txt(
@@ -200,6 +218,10 @@ pub enum LocustDirError {
     CouldNotCheckIfLocustDirIsEmpty(#[source] IoError),
     #[error("Locust dir is empty")]
     LocustDirIsEmpty,
+    #[error("Could not iterate over locust dir: {0}")]
+    CouldNotIterateOverLocustDir(#[source] IoError),
+    #[error("Locust dir does not contain any python files")]
+    NoPythonFilesInLocustDir,
 }
 
 #[derive(ThisError, Debug)]
@@ -264,117 +286,163 @@ impl From<DirExistsAndNotEmptyError> for LocustDirError {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::path::Path;
 
-    use super::*;
+    const CRATE_DIR: &str = env!("CARGO_MANIFEST_DIR");
 
     fn get_uploaded_projects_dir() -> PathBuf {
-        let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-        Path::new(crate_dir)
+        Path::new(CRATE_DIR)
             .join("tests_dir")
             .join("uploaded_projects")
     }
 
-    fn create_project_installer_default_args(
-        uploaded_project_dir: PathBuf,
-    ) -> NewLocalProjectInstallerArgs {
-        NewLocalProjectInstallerArgs {
-            uploaded_project_dir,
-            installed_project_dir: PathBuf::from(""),
-            project_env_dir: PathBuf::from(""),
-        }
+    fn get_installed_projects_dir() -> PathBuf {
+        Path::new(CRATE_DIR)
+            .join("tests_dir")
+            .join("installed_projects")
     }
 
-    #[tokio::test]
-    pub async fn project_dir_does_not_exist() {
-        let installer_args = create_project_installer_default_args(
-            get_uploaded_projects_dir().join("project_dir_does_not_exist"),
-        );
-
-        match LocalProjectInstaller::check(&installer_args).await {
-            Err(ProjectCheckError::ProjectDirError(ProjectDirError::ProjectDirDoesNotExist)) => {}
-            Err(err) => {
-                panic!("Unexpected error: {}", err);
-            }
-            _ => panic!("Unexpected result"),
-        }
+    fn get_environments_dir() -> PathBuf {
+        Path::new(CRATE_DIR).join("tests_dir").join("environments")
     }
 
-    #[tokio::test]
-    pub async fn project_dir_is_empty() {
-        let installer_args =
-            create_project_installer_default_args(get_uploaded_projects_dir().join("empty"));
+    mod check_projects {
+        use super::*;
 
-        match LocalProjectInstaller::check(&installer_args).await {
-            Err(ProjectCheckError::ProjectDirError(ProjectDirError::ProjectDirIsEmpty)) => {}
-            Err(err) => {
-                panic!("Unexpected error: {}", err);
+        fn create_project_installer_default_args(
+            uploaded_project_dir: PathBuf,
+        ) -> NewLocalProjectInstallerArgs {
+            NewLocalProjectInstallerArgs {
+                uploaded_project_dir,
+                installed_project_dir: PathBuf::from(""),
+                project_env_dir: PathBuf::from(""),
             }
-            _ => panic!("Unexpected result"),
         }
-    }
 
-    #[tokio::test]
-    pub async fn requirements_does_not_exist() {
-        let installer_args = create_project_installer_default_args(
-            get_uploaded_projects_dir().join("requirements_does_not_exist"),
-        );
+        #[tokio::test]
+        pub async fn project_dir_does_not_exist() {
+            let installer_args = create_project_installer_default_args(
+                get_uploaded_projects_dir().join("project_dir_does_not_exist"),
+            );
 
-        match LocalProjectInstaller::check(&installer_args).await {
-            Err(ProjectCheckError::RequirementsError(
-                RequirementsError::RequirementsTxtDoesNotExist,
-            )) => {}
-            Err(err) => {
-                panic!("Unexpected error: {}", err);
+            match LocalProjectInstaller::check(&installer_args).await {
+                Err(ProjectCheckError::ProjectDirError(
+                    ProjectDirError::ProjectDirDoesNotExist,
+                )) => {}
+                Err(err) => {
+                    panic!("Unexpected error: {}", err);
+                }
+                _ => panic!("Unexpected result"),
             }
-            _ => panic!("Unexpected result"),
         }
-    }
 
-    #[tokio::test]
-    pub async fn requirements_does_not_contain_locust() {
-        let installer_args = create_project_installer_default_args(
-            get_uploaded_projects_dir().join("requirements_does_not_contain_locust"),
-        );
+        #[tokio::test]
+        pub async fn project_dir_is_empty() {
+            let installer_args =
+                create_project_installer_default_args(get_uploaded_projects_dir().join("empty"));
 
-        match LocalProjectInstaller::check(&installer_args).await {
-            Err(ProjectCheckError::RequirementsError(
-                RequirementsError::LocustIsNotInRequirementsTxt,
-            )) => {}
-            Err(err) => {
-                panic!("Unexpected error: {}", err);
+            match LocalProjectInstaller::check(&installer_args).await {
+                Err(ProjectCheckError::ProjectDirError(ProjectDirError::ProjectDirIsEmpty)) => {}
+                Err(err) => {
+                    panic!("Unexpected error: {}", err);
+                }
+                _ => panic!("Unexpected result"),
             }
-            _ => panic!("Unexpected result"),
         }
-    }
 
-    #[tokio::test]
-    pub async fn locust_dir_does_not_exist() {
-        let installer_args = create_project_installer_default_args(
-            get_uploaded_projects_dir().join("locust_dir_does_not_exist"),
-        );
+        #[tokio::test]
+        pub async fn requirements_does_not_exist() {
+            let installer_args = create_project_installer_default_args(
+                get_uploaded_projects_dir().join("requirements_does_not_exist"),
+            );
 
-        match LocalProjectInstaller::check(&installer_args).await {
-            Err(ProjectCheckError::LocustDirError(LocustDirError::LocustDirDoesNotExist)) => {}
-            Err(err) => {
-                panic!("Unexpected error: {}", err);
+            match LocalProjectInstaller::check(&installer_args).await {
+                Err(ProjectCheckError::RequirementsError(
+                    RequirementsError::RequirementsTxtDoesNotExist,
+                )) => {}
+                Err(err) => {
+                    panic!("Unexpected error: {}", err);
+                }
+                _ => panic!("Unexpected result"),
             }
-            _ => panic!("Unexpected result"),
         }
-    }
 
-    #[tokio::test]
-    pub async fn locust_dir_is_empty() {
-        let installer_args = create_project_installer_default_args(
-            get_uploaded_projects_dir().join("locust_dir_is_empty"),
-        );
+        #[tokio::test]
+        pub async fn requirements_does_not_contain_locust() {
+            let installer_args = create_project_installer_default_args(
+                get_uploaded_projects_dir().join("requirements_does_not_contain_locust"),
+            );
 
-        match LocalProjectInstaller::check(&installer_args).await {
-            Err(ProjectCheckError::LocustDirError(LocustDirError::LocustDirIsEmpty)) => {}
-            Err(err) => {
-                panic!("Unexpected error: {}", err);
+            match LocalProjectInstaller::check(&installer_args).await {
+                Err(ProjectCheckError::RequirementsError(
+                    RequirementsError::LocustIsNotInRequirementsTxt,
+                )) => {}
+                Err(err) => {
+                    panic!("Unexpected error: {}", err);
+                }
+                _ => panic!("Unexpected result"),
             }
-            _ => panic!("Unexpected result"),
+        }
+
+        #[tokio::test]
+        pub async fn locust_dir_does_not_exist() {
+            let installer_args = create_project_installer_default_args(
+                get_uploaded_projects_dir().join("locust_dir_does_not_exist"),
+            );
+
+            match LocalProjectInstaller::check(&installer_args).await {
+                Err(ProjectCheckError::LocustDirError(LocustDirError::LocustDirDoesNotExist)) => {}
+                Err(err) => {
+                    panic!("Unexpected error: {}", err);
+                }
+                _ => panic!("Unexpected result"),
+            }
+        }
+
+        #[tokio::test]
+        pub async fn locust_dir_is_empty() {
+            let installer_args = create_project_installer_default_args(
+                get_uploaded_projects_dir().join("locust_dir_is_empty"),
+            );
+
+            match LocalProjectInstaller::check(&installer_args).await {
+                Err(ProjectCheckError::LocustDirError(LocustDirError::LocustDirIsEmpty)) => {}
+                Err(err) => {
+                    panic!("Unexpected error: {}", err);
+                }
+                _ => panic!("Unexpected result"),
+            }
+        }
+
+        #[tokio::test]
+        pub async fn locust_dir_contains_no_python_files() {
+            let installer_args = create_project_installer_default_args(
+                get_uploaded_projects_dir().join("locust_dir_is_contains_no_python_files"),
+            );
+
+            match LocalProjectInstaller::check(&installer_args).await {
+                Err(ProjectCheckError::LocustDirError(
+                    LocustDirError::NoPythonFilesInLocustDir,
+                )) => {}
+                Err(err) => {
+                    panic!("Unexpected error: {}", err);
+                }
+                _ => panic!("Unexpected result"),
+            }
+        }
+
+        #[tokio::test]
+        pub async fn valid() {
+            let installer_args =
+                create_project_installer_default_args(get_uploaded_projects_dir().join("valid"));
+
+            match LocalProjectInstaller::check(&installer_args).await {
+                Ok(_) => {}
+                Err(err) => {
+                    panic!("Unexpected error: {}", err);
+                }
+            }
         }
     }
 }
