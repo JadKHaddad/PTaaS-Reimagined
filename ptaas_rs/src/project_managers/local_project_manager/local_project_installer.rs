@@ -1,14 +1,173 @@
 use std::{io::Error as IoError, path::PathBuf, process::Stdio};
 
 use crate::project_managers::{
-    process::{NewProcessArgs, ProcessCreateError},
+    process::{NewProcessArgs, ProcessCreateError, Status},
     Process,
 };
 use thiserror::Error as ThisError;
 use tokio::fs;
 
+#[derive(Debug)]
+pub struct NewLocalProjectInstallerArgs {
+    pub uploaded_project_dir: PathBuf,
+    pub installed_project_dir: PathBuf,
+    pub project_env_dir: PathBuf,
+}
+
+pub struct LocalProjectInstaller {
+    uploaded_project_dir: PathBuf,
+    installed_project_dir: PathBuf,
+    project_env_dir: PathBuf,
+    process: Process,
+}
+
+impl LocalProjectInstaller {
+    pub async fn new(
+        new_local_project_installer_args: NewLocalProjectInstallerArgs,
+    ) -> Result<Self, StartInstallError> {
+        let process = Self::check_and_start_install(&new_local_project_installer_args).await?;
+
+        Ok(Self {
+            uploaded_project_dir: new_local_project_installer_args.uploaded_project_dir,
+            installed_project_dir: new_local_project_installer_args.installed_project_dir,
+            project_env_dir: new_local_project_installer_args.project_env_dir,
+            process,
+        })
+    }
+
+    pub fn process_status(&mut self) -> Result<&Status, IoError> {
+        self.process.status()
+    }
+
+    async fn check_and_start_install(
+        new_local_project_installer_args: &NewLocalProjectInstallerArgs,
+    ) -> Result<Process, StartInstallError> {
+        Self::check(new_local_project_installer_args).await?;
+
+        let new_process_args = if cfg!(target_os = "windows") {
+            let project_env_dir_str = new_local_project_installer_args
+                .project_env_dir
+                .to_str()
+                .ok_or(StartInstallError::FailedToConvertPathBufToString(
+                    new_local_project_installer_args.project_env_dir.clone(),
+                ))?;
+
+            NewProcessArgs {
+                given_id: None,
+                program: "cmd",
+                args: vec!["/C", "python", "-m", "venv", project_env_dir_str],
+                current_dir: ".",
+                stdin: Stdio::inherit(),
+                stdout: Stdio::inherit(),
+                stderr: Stdio::inherit(),
+                kill_on_drop: true,
+            }
+        } else {
+            todo!();
+        };
+
+        Ok(Process::new(new_process_args)?)
+    }
+
+    async fn check(
+        new_local_project_installer_args: &NewLocalProjectInstallerArgs,
+    ) -> Result<(), ProjectCheckError> {
+        Self::check_dir_exists_and_not_empty(
+            &new_local_project_installer_args.uploaded_project_dir,
+        )
+        .await
+        .map_err(|err| ProjectCheckError::ProjectDirError(err.into()))?;
+
+        let requirements_file_path = new_local_project_installer_args
+            .uploaded_project_dir
+            .join("requirements.txt");
+
+        Self::check_requirements_txt_exists_and_locust_in_requirements_txt(&requirements_file_path)
+            .await?;
+
+        let locust_dir_path = new_local_project_installer_args
+            .uploaded_project_dir
+            .join("locust");
+
+        Self::check_dir_exists_and_not_empty(&locust_dir_path)
+            .await
+            .map_err(|err| ProjectCheckError::LocustDirError(err.into()))?;
+
+        Ok(())
+    }
+
+    async fn check_dir_exists_and_not_empty(
+        dir: &PathBuf,
+    ) -> Result<(), DirExistsAndNotEmptyError> {
+        if !fs::try_exists(dir)
+            .await
+            .map_err(DirExistsAndNotEmptyError::CouldNotCheckIfDirExists)?
+        {
+            return Err(DirExistsAndNotEmptyError::DirDoesNotExist);
+        }
+
+        let mut dir_content = fs::read_dir(dir)
+            .await
+            .map_err(DirExistsAndNotEmptyError::CouldNotCheckIfDirIsEmpty)?;
+
+        if dir_content
+            .next_entry()
+            .await
+            .map_err(DirExistsAndNotEmptyError::CouldNotCheckIfDirIsEmpty)?
+            .is_none()
+        {
+            return Err(DirExistsAndNotEmptyError::DirIsEmpty);
+        }
+
+        Ok(())
+    }
+
+    async fn check_requirements_txt_exists_and_locust_in_requirements_txt(
+        requirements_file_path: &PathBuf,
+    ) -> Result<(), RequirementsError> {
+        if !fs::try_exists(&requirements_file_path)
+            .await
+            .map_err(RequirementsError::CouldNotCheckIfRequirementsTxtExists)?
+        {
+            return Err(RequirementsError::RequirementsTxtDoesNotExist);
+        }
+
+        let requirements_file_content = fs::read_to_string(requirements_file_path)
+            .await
+            .map_err(RequirementsError::CouldNotReadRequirementsTxt)?;
+
+        if !requirements_file_content.contains("locust") {
+            return Err(RequirementsError::LocustIsNotInRequirementsTxt);
+        }
+
+        Ok(())
+    }
+}
+
 #[derive(ThisError, Debug)]
 pub enum ProjectCheckError {
+    #[error("Project dir error: {0}")]
+    ProjectDirError(
+        #[source]
+        #[from]
+        ProjectDirError,
+    ),
+    #[error("Requirements error: {0}")]
+    RequirementsError(
+        #[source]
+        #[from]
+        RequirementsError,
+    ),
+    #[error("Locust dir error: {0}")]
+    LocustDirError(
+        #[source]
+        #[from]
+        LocustDirError,
+    ),
+}
+
+#[derive(ThisError, Debug)]
+pub enum ProjectDirError {
     #[error("Could not check if project dir exists: {0}")]
     CouldNotCheckIfProjectDirExists(#[source] IoError),
     #[error("Project dir does not exist")]
@@ -17,6 +176,10 @@ pub enum ProjectCheckError {
     CouldNotCheckIfProjectDirIsEmpty(#[source] IoError),
     #[error("Project dir is empty")]
     ProjectDirIsEmpty,
+}
+
+#[derive(ThisError, Debug)]
+pub enum RequirementsError {
     #[error("Could not check if requirements.txt exists: {0}")]
     CouldNotCheckIfRequirementsTxtExists(#[source] IoError),
     #[error("requirements.txt does not exist")]
@@ -25,6 +188,10 @@ pub enum ProjectCheckError {
     CouldNotReadRequirementsTxt(#[source] IoError),
     #[error("Locust is not in requirements.txt")]
     LocustIsNotInRequirementsTxt,
+}
+
+#[derive(ThisError, Debug)]
+pub enum LocustDirError {
     #[error("Could not check if locust dir exists: {0}")]
     CouldNotCheckIfLocustDirExists(#[source] IoError),
     #[error("Locust dir does not exist")]
@@ -37,13 +204,14 @@ pub enum ProjectCheckError {
 
 #[derive(ThisError, Debug)]
 pub enum StartInstallError {
+    #[error("Could not convert path buf to string: {0}")]
+    FailedToConvertPathBufToString(PathBuf),
     #[error("Project is not valid: {0}")]
     CheckFailed(
         #[from]
         #[source]
         ProjectCheckError,
     ),
-
     #[error("Could not create process: {0}")]
     ProcessCreateError(
         #[from]
@@ -52,121 +220,45 @@ pub enum StartInstallError {
     ),
 }
 
-pub struct LocalProjectInstaller {
-    uploaded_project_dir: PathBuf,
-    installed_project_dir: PathBuf,
-    project_env_dir: PathBuf,
-    process: Option<Process>,
+#[derive(ThisError, Debug)]
+pub enum DirExistsAndNotEmptyError {
+    #[error("Could not check if dir exists: {0}")]
+    CouldNotCheckIfDirExists(#[source] IoError),
+    #[error("Dir does not exist")]
+    DirDoesNotExist,
+    #[error("Could not check if dir is empty: {0}")]
+    CouldNotCheckIfDirIsEmpty(#[source] IoError),
+    #[error("Dir is empty")]
+    DirIsEmpty,
 }
 
-impl LocalProjectInstaller {
-    pub fn new(
-        uploaded_project_dir: PathBuf,
-        installed_project_dir: PathBuf,
-        project_env_dir: PathBuf,
-    ) -> Self {
-        Self {
-            uploaded_project_dir,
-            installed_project_dir,
-            project_env_dir,
-            process: None,
-        }
-    }
-
-    pub async fn start_install(&mut self) -> Result<(), StartInstallError> {
-        self.check().await?;
-
-        let new_process_args = if cfg!(target_os = "windows") {
-            NewProcessArgs {
-                given_id: None,
-                program: "cmd",
-                args: vec![
-                    "/C",
-                    "python",
-                    "-m",
-                    "venv",
-                    self.project_env_dir.to_str().unwrap(),
-                ],
-                current_dir: ".",
-                stdin: Stdio::inherit(),
-                stdout: Stdio::inherit(),
-                stderr: Stdio::inherit(),
-                kill_on_drop: true,
+impl From<DirExistsAndNotEmptyError> for ProjectDirError {
+    fn from(dir_exists_and_not_empty_error: DirExistsAndNotEmptyError) -> Self {
+        match dir_exists_and_not_empty_error {
+            DirExistsAndNotEmptyError::CouldNotCheckIfDirExists(e) => {
+                Self::CouldNotCheckIfProjectDirExists(e)
             }
-        } else {
-            todo!();
-        };
-
-        self.process = Some(Process::new(new_process_args)?);
-
-        Ok(())
+            DirExistsAndNotEmptyError::DirDoesNotExist => Self::ProjectDirDoesNotExist,
+            DirExistsAndNotEmptyError::CouldNotCheckIfDirIsEmpty(e) => {
+                Self::CouldNotCheckIfProjectDirIsEmpty(e)
+            }
+            DirExistsAndNotEmptyError::DirIsEmpty => Self::ProjectDirIsEmpty,
+        }
     }
+}
 
-    async fn check(&self) -> Result<(), ProjectCheckError> {
-        // check if uploaded_project_dir exists
-        if !fs::try_exists(&self.uploaded_project_dir)
-            .await
-            .map_err(ProjectCheckError::CouldNotCheckIfProjectDirExists)?
-        {
-            return Err(ProjectCheckError::ProjectDirDoesNotExist);
+impl From<DirExistsAndNotEmptyError> for LocustDirError {
+    fn from(dir_exists_and_not_empty_error: DirExistsAndNotEmptyError) -> Self {
+        match dir_exists_and_not_empty_error {
+            DirExistsAndNotEmptyError::CouldNotCheckIfDirExists(e) => {
+                Self::CouldNotCheckIfLocustDirExists(e)
+            }
+            DirExistsAndNotEmptyError::DirDoesNotExist => Self::LocustDirDoesNotExist,
+            DirExistsAndNotEmptyError::CouldNotCheckIfDirIsEmpty(e) => {
+                Self::CouldNotCheckIfLocustDirIsEmpty(e)
+            }
+            DirExistsAndNotEmptyError::DirIsEmpty => Self::LocustDirIsEmpty,
         }
-
-        // check if uploaded_project_dir is empty
-        let mut uploaded_project_dir_content = fs::read_dir(&self.uploaded_project_dir)
-            .await
-            .map_err(ProjectCheckError::CouldNotCheckIfProjectDirIsEmpty)?;
-
-        if uploaded_project_dir_content
-            .next_entry()
-            .await
-            .map_err(ProjectCheckError::CouldNotCheckIfProjectDirIsEmpty)?
-            .is_none()
-        {
-            return Err(ProjectCheckError::ProjectDirIsEmpty);
-        }
-
-        // check if requirements.txt exists in uploaded_project_dir
-        let requirements_file_path = self.uploaded_project_dir.join("requirements.txt");
-        if !fs::try_exists(&requirements_file_path)
-            .await
-            .map_err(ProjectCheckError::CouldNotCheckIfRequirementsTxtExists)?
-        {
-            return Err(ProjectCheckError::RequirementsTxtDoesNotExist);
-        }
-
-        // check if locust is in requirements.txt
-        let requirements_file_content = fs::read_to_string(&requirements_file_path)
-            .await
-            .map_err(ProjectCheckError::CouldNotReadRequirementsTxt)?;
-
-        if !requirements_file_content.contains("locust") {
-            return Err(ProjectCheckError::LocustIsNotInRequirementsTxt);
-        }
-
-        // check if locust dir exists in uploaded_project_dir
-        let locust_dir_path = self.uploaded_project_dir.join("locust");
-        if !fs::try_exists(&locust_dir_path)
-            .await
-            .map_err(ProjectCheckError::CouldNotCheckIfLocustDirExists)?
-        {
-            return Err(ProjectCheckError::LocustDirDoesNotExist);
-        }
-
-        // check if locust dir is empty
-        let mut locust_dir_content = fs::read_dir(&locust_dir_path)
-            .await
-            .map_err(ProjectCheckError::CouldNotCheckIfLocustDirExists)?;
-
-        if locust_dir_content
-            .next_entry()
-            .await
-            .map_err(ProjectCheckError::CouldNotCheckIfLocustDirIsEmpty)?
-            .is_none()
-        {
-            return Err(ProjectCheckError::LocustDirIsEmpty);
-        }
-
-        Ok(())
     }
 }
 
@@ -183,20 +275,24 @@ mod tests {
             .join("uploaded_projects")
     }
 
-    fn create_project_installer_with_default_dirs(
+    fn create_project_installer_default_args(
         uploaded_project_dir: PathBuf,
-    ) -> LocalProjectInstaller {
-        LocalProjectInstaller::new(uploaded_project_dir, PathBuf::from(""), PathBuf::from(""))
+    ) -> NewLocalProjectInstallerArgs {
+        NewLocalProjectInstallerArgs {
+            uploaded_project_dir,
+            installed_project_dir: PathBuf::from(""),
+            project_env_dir: PathBuf::from(""),
+        }
     }
 
     #[tokio::test]
     pub async fn project_dir_does_not_exist() {
-        let installer = create_project_installer_with_default_dirs(
+        let installer_args = create_project_installer_default_args(
             get_uploaded_projects_dir().join("project_dir_does_not_exist"),
         );
 
-        match installer.check().await {
-            Err(ProjectCheckError::ProjectDirDoesNotExist) => {}
+        match LocalProjectInstaller::check(&installer_args).await {
+            Err(ProjectCheckError::ProjectDirError(ProjectDirError::ProjectDirDoesNotExist)) => {}
             Err(err) => {
                 panic!("Unexpected error: {}", err);
             }
@@ -206,11 +302,11 @@ mod tests {
 
     #[tokio::test]
     pub async fn project_dir_is_empty() {
-        let installer =
-            create_project_installer_with_default_dirs(get_uploaded_projects_dir().join("empty"));
+        let installer_args =
+            create_project_installer_default_args(get_uploaded_projects_dir().join("empty"));
 
-        match installer.check().await {
-            Err(ProjectCheckError::ProjectDirIsEmpty) => {}
+        match LocalProjectInstaller::check(&installer_args).await {
+            Err(ProjectCheckError::ProjectDirError(ProjectDirError::ProjectDirIsEmpty)) => {}
             Err(err) => {
                 panic!("Unexpected error: {}", err);
             }
@@ -220,12 +316,14 @@ mod tests {
 
     #[tokio::test]
     pub async fn requirements_does_not_exist() {
-        let installer = create_project_installer_with_default_dirs(
+        let installer_args = create_project_installer_default_args(
             get_uploaded_projects_dir().join("requirements_does_not_exist"),
         );
 
-        match installer.check().await {
-            Err(ProjectCheckError::RequirementsTxtDoesNotExist) => {}
+        match LocalProjectInstaller::check(&installer_args).await {
+            Err(ProjectCheckError::RequirementsError(
+                RequirementsError::RequirementsTxtDoesNotExist,
+            )) => {}
             Err(err) => {
                 panic!("Unexpected error: {}", err);
             }
@@ -235,12 +333,14 @@ mod tests {
 
     #[tokio::test]
     pub async fn requirements_does_not_contain_locust() {
-        let installer = create_project_installer_with_default_dirs(
+        let installer_args = create_project_installer_default_args(
             get_uploaded_projects_dir().join("requirements_does_not_contain_locust"),
         );
 
-        match installer.check().await {
-            Err(ProjectCheckError::LocustIsNotInRequirementsTxt) => {}
+        match LocalProjectInstaller::check(&installer_args).await {
+            Err(ProjectCheckError::RequirementsError(
+                RequirementsError::LocustIsNotInRequirementsTxt,
+            )) => {}
             Err(err) => {
                 panic!("Unexpected error: {}", err);
             }
@@ -250,12 +350,12 @@ mod tests {
 
     #[tokio::test]
     pub async fn locust_dir_does_not_exist() {
-        let installer = create_project_installer_with_default_dirs(
+        let installer_args = create_project_installer_default_args(
             get_uploaded_projects_dir().join("locust_dir_does_not_exist"),
         );
 
-        match installer.check().await {
-            Err(ProjectCheckError::LocustDirDoesNotExist) => {}
+        match LocalProjectInstaller::check(&installer_args).await {
+            Err(ProjectCheckError::LocustDirError(LocustDirError::LocustDirDoesNotExist)) => {}
             Err(err) => {
                 panic!("Unexpected error: {}", err);
             }
@@ -265,12 +365,12 @@ mod tests {
 
     #[tokio::test]
     pub async fn locust_dir_is_empty() {
-        let installer = create_project_installer_with_default_dirs(
+        let installer_args = create_project_installer_default_args(
             get_uploaded_projects_dir().join("locust_dir_is_empty"),
         );
 
-        match installer.check().await {
-            Err(ProjectCheckError::LocustDirIsEmpty) => {}
+        match LocalProjectInstaller::check(&installer_args).await {
+            Err(ProjectCheckError::LocustDirError(LocustDirError::LocustDirIsEmpty)) => {}
             Err(err) => {
                 panic!("Unexpected error: {}", err);
             }
