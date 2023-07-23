@@ -375,95 +375,101 @@ impl ToString for DartEnum {
     }
 }
 
-pub fn dev() {
-    let fields = vec![
-        DartField {
-            keywords: vec!["final".into()],
-            name: "id".into(),
-            type_: DartType::Primitive("String".into()),
-            optional: false,
-        },
-        DartField {
-            keywords: vec!["final".into()],
-            name: "installed".into(),
-            type_: DartType::Primitive("bool".into()),
-            optional: false,
-        },
-        DartField {
-            keywords: vec!["final".into()],
-            name: "scripts".into(),
-            type_: DartType::List("Script".into()),
-            optional: false,
-        },
-    ];
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    let cons_parameters = DartParameters::Named(vec![
-        NamedDartParameter {
-            required: true,
-            parameter: DartParameter::ConstructorParameter(DartConstructorParameter {
+    #[test]
+    fn create_a_simple_class() {
+        let fields = vec![
+            DartField {
+                keywords: vec!["final".into()],
                 name: "id".into(),
-            }),
-        },
-        NamedDartParameter {
-            required: true,
-            parameter: DartParameter::ConstructorParameter(DartConstructorParameter {
+                type_: DartType::Primitive("String".into()),
+                optional: false,
+            },
+            DartField {
+                keywords: vec!["final".into()],
                 name: "installed".into(),
-            }),
-        },
-        NamedDartParameter {
-            required: true,
-            parameter: DartParameter::ConstructorParameter(DartConstructorParameter {
+                type_: DartType::Primitive("bool".into()),
+                optional: false,
+            },
+            DartField {
+                keywords: vec!["final".into()],
                 name: "scripts".into(),
-            }),
-        },
-    ]);
+                type_: DartType::List("Script".into()),
+                optional: false,
+            },
+        ];
 
-    let constructor = DartConstructor::OneLiner(DartOnelineConstructor {
-        name: "Project".into(),
-        parameters: cons_parameters,
-    });
+        let cons_parameters = DartParameters::Named(vec![
+            NamedDartParameter {
+                required: true,
+                parameter: DartParameter::ConstructorParameter(DartConstructorParameter {
+                    name: "id".into(),
+                }),
+            },
+            NamedDartParameter {
+                required: true,
+                parameter: DartParameter::ConstructorParameter(DartConstructorParameter {
+                    name: "installed".into(),
+                }),
+            },
+            NamedDartParameter {
+                required: true,
+                parameter: DartParameter::ConstructorParameter(DartConstructorParameter {
+                    name: "scripts".into(),
+                }),
+            },
+        ]);
 
-    let factory_body = MethodBody::OneLiner(OnelineMethodBody {
-        name: "_$ProjectFromJson".into(),
-        parameters: vec!["json".into()],
-    });
+        let constructor = DartConstructor::OneLiner(DartOnelineConstructor {
+            name: "Project".into(),
+            parameters: cons_parameters,
+        });
 
-    let factory_params =
-        DartParameters::Positional(vec![DartParameter::MethodParameter(DartMethodParameter {
-            name: "json".into(),
+        let factory_body = MethodBody::OneLiner(OnelineMethodBody {
+            name: "_$ProjectFromJson".into(),
+            parameters: vec!["json".into()],
+        });
+
+        let factory_params =
+            DartParameters::Positional(vec![DartParameter::MethodParameter(DartMethodParameter {
+                name: "json".into(),
+                type_: DartType::Map("String".into(), "dynamic".into()),
+            })]);
+
+        let factory = DartConstructor::Factory(DartFactoryConstructor::OneLiner(
+            DartOnelineFactoryConstructor {
+                class_name: "Project".into(),
+                name: "fromJson".into(),
+                parameters: factory_params,
+                body: factory_body,
+            },
+        ));
+
+        let to_json_method_params = DartParameters::Positional(vec![]);
+
+        let to_json_method_body = MethodBody::OneLiner(OnelineMethodBody {
+            name: "_$ProjectToJson".into(),
+            parameters: vec!["this".into()],
+        });
+
+        let to_json_method = DartMethod::OneLiner(DartOnelineMethod {
+            name: "toJson".into(),
             type_: DartType::Map("String".into(), "dynamic".into()),
-        })]);
+            parameters: to_json_method_params,
+            body: to_json_method_body,
+        });
 
-    let factory = DartConstructor::Factory(DartFactoryConstructor::OneLiner(
-        DartOnelineFactoryConstructor {
-            class_name: "Project".into(),
-            name: "fromJson".into(),
-            parameters: factory_params,
-            body: factory_body,
-        },
-    ));
+        let dart_class = DartClass {
+            decorators: vec!["@JsonSerializable()".into()],
+            name: "Project".into(),
+            fields,
+            constructors: vec![constructor, factory],
+            methods: vec![to_json_method],
+        };
 
-    let to_json_method_params = DartParameters::Positional(vec![]);
-
-    let to_json_method_body = MethodBody::OneLiner(OnelineMethodBody {
-        name: "_$ProjectToJson".into(),
-        parameters: vec!["this".into()],
-    });
-
-    let to_json_method = DartMethod::OneLiner(DartOnelineMethod {
-        name: "toJson".into(),
-        type_: DartType::Map("String".into(), "dynamic".into()),
-        parameters: to_json_method_params,
-        body: to_json_method_body,
-    });
-
-    let dart_class = DartClass {
-        decorators: vec!["@JsonSerializable()".into()],
-        name: "Project".into(),
-        fields,
-        constructors: vec![constructor, factory],
-        methods: vec![to_json_method],
-    };
-
-    println!("{}", dart_class.to_string());
+        println!("{}", dart_class.to_string());
+    }
 }

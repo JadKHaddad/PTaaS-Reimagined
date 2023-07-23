@@ -1,5 +1,5 @@
 [package]
-name = "convertible_macros_dev"
+name = "convertible_macros_test"
 version = "0.1.0"
 edition = "2021"
 

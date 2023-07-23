@@ -4,6 +4,6 @@ members = [
     "convertible/convertible",
     "convertible/convertible_definitions",
     "convertible/convertible_macros",
-    "convertible_macros_dev",
+    "convertible_macros_test",
     "ptaas_rs"
 ]

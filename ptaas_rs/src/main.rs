@@ -1,7 +1,5 @@
-use convertible::definitions::dart::dev as dart_dev;
 use ptaas_rs::{
     init_tracing,
-    models_2::print_dummies,
     project_managers::{process::dev::run_all as run_process_dev_examples, LocalProjectManager},
 };
 
@@ -27,7 +25,5 @@ async fn main() {
         }
     };
 
-    print_dummies();
-    dart_dev();
     run_process_dev_examples().await;
 }
