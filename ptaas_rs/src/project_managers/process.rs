@@ -323,233 +323,159 @@ impl Drop for Process {
     }
 }
 
-pub mod dev {
-    use tokio::io::{self, AsyncBufReadExt, AsyncWriteExt};
+#[cfg(target_os = "windows")]
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
 
     use super::*;
-    pub async fn program_exists(program: &str) {
-        println!("{:?}", which::which(program));
+    use tracing_test::traced_test;
+
+    const CRATE_DIR: &str = env!("CARGO_MANIFEST_DIR");
+
+    fn get_tests_dir() -> PathBuf {
+        Path::new(CRATE_DIR).join("tests_dir")
     }
 
-    fn create_numbers_process(stdout: Stdio) -> Result<Process, ProcessCreateError> {
+    fn get_numbers_script_path() -> PathBuf {
+        get_tests_dir().join("numbers.ps1")
+    }
+
+    fn create_numbers_process(
+        stdin: Stdio,
+        stdout: Stdio,
+        stderr: Stdio,
+    ) -> Result<Process, ProcessCreateError> {
+        let numbers_script_path = get_numbers_script_path();
+        let numbers_script_path_str = numbers_script_path
+            .to_str()
+            .expect("Error converting path to string.");
+
         let args = NewProcessArgs {
             given_id: Some("numbers.ps1".into()),
             program: "powershell.exe",
-            args: vec!["./numbers.ps1"],
+            args: vec![numbers_script_path_str],
             current_dir: ".",
-            stdin: Stdio::inherit(),
+            stdin,
             stdout,
-            stderr: Stdio::inherit(),
+            stderr,
             kill_on_drop: true,
         };
+
         Process::new(args)
     }
 
-    pub async fn run_numbers_script_and_kill_before_termination() {
-        let mut p = match create_numbers_process(Stdio::inherit()) {
-            Ok(p) => p,
-            Err(error) => {
-                tracing::error!(%error, "Error creating process.");
-                return;
-            }
+    fn create_non_existing_process() -> Result<Process, ProcessCreateError> {
+        let args = NewProcessArgs {
+            given_id: Some("non_existing_process".into()),
+            program: "non_existing_process",
+            args: vec![],
+            current_dir: ".",
+            stdin: Stdio::null(),
+            stdout: Stdio::null(),
+            stderr: Stdio::null(),
+            kill_on_drop: true,
         };
+
+        Process::new(args)
+    }
+
+    fn create_numbers_process_with_panic() -> Process {
+        create_numbers_process(Stdio::null(), Stdio::null(), Stdio::null())
+            .expect("Error creating process.")
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn run_non_existing_process() {
+        match create_non_existing_process() {
+            Ok(_) => panic!("Process should not be created."),
+            Err(error) => match error {
+                ProcessCreateError::CouldNotCreateProcess(io_error) => match io_error.kind() {
+                    std::io::ErrorKind::NotFound => {}
+                    _ => panic!("Unexpected error kind: {:?}", io_error.kind()),
+                },
+            },
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn run_numbers_script_and_kill_before_termination() {
+        let mut numbers_process = create_numbers_process_with_panic();
+
         tokio::time::sleep(Duration::from_secs(2)).await;
-        match p.check_status_and_kill_and_wait_and_set_status().await {
-            Ok(_) => {
-                tracing::info!(
-                    id = p.id(),
-                    given_id = p.given_id(),
-                    "Process killed and awaited."
-                );
-            }
-            Err(error) => {
-                tracing::error!(
-                    %error,
-                    id = p.id(),
-                    given_id = p.given_id(),
-                    "Error killing process."
-                );
-            }
+
+        numbers_process
+            .check_status_and_kill_and_wait_and_set_status()
+            .await
+            .expect("Error killing process.");
+
+        match numbers_process.status() {
+            Ok(status) => match status {
+                Status::TerminatedWithUnknownError => if cfg!(target_os = "linux") {},
+                Status::TerminatedWithError(_) => if cfg!(target_os = "windows") {},
+                Status::TerminatedSuccessfully => panic!("Unexpected status: {:?}", status),
+                _ => panic!("Uncovered case"),
+            },
+            _ => panic!("Error getting status."),
         }
     }
 
-    pub async fn run_numbers_script_and_kill_after_termination() {
-        let mut p = match create_numbers_process(Stdio::inherit()) {
-            Ok(p) => p,
-            Err(error) => {
-                tracing::error!(%error, "Error creating process.");
-                return;
-            }
-        };
-        tokio::time::sleep(Duration::from_secs(10)).await;
-        match p.check_status_and_kill_and_wait_and_set_status().await {
-            Ok(_) => {
-                tracing::info!(
-                    id = p.id(),
-                    given_id = p.given_id(),
-                    "Process killed and awaited."
-                );
-            }
-            Err(error) => {
-                tracing::error!(
-                    %error,
-                    id = p.id(),
-                    given_id = p.given_id(),
-                    "Error killing process."
-                );
-            }
+    #[tokio::test]
+    #[traced_test]
+    async fn run_numbers_script_and_kill_after_termination() {
+        let mut numbers_process = create_numbers_process_with_panic();
+
+        tokio::time::sleep(Duration::from_secs(5)).await;
+
+        numbers_process
+            .check_status_and_kill_and_wait_and_set_status()
+            .await
+            .expect("Error killing process.");
+
+        match numbers_process.status() {
+            Ok(status) => match status {
+                Status::TerminatedSuccessfully => {}
+                _ => panic!("Unexpected status: {:?}", status),
+            },
+            _ => panic!("Error getting status."),
         }
     }
 
-    pub async fn run_numbers_script_with_less_timeout() {
-        let mut p = match create_numbers_process(Stdio::inherit()) {
-            Ok(p) => p,
-            Err(error) => {
-                tracing::error!(%error, "Error creating process.");
-                return;
-            }
-        };
-        match p
+    #[tokio::test]
+    #[traced_test]
+    async fn run_numbers_script_with_less_timeout() {
+        let mut numbers_process = create_numbers_process_with_panic();
+
+        match numbers_process
             .wait_with_timeout_and_output_and_set_status(Duration::from_secs(2))
             .await
         {
-            Ok(output) => {
-                tracing::info!(
-                    id = p.id(),
-                    given_id = p.given_id(),
-                    ?output,
-                    "Process terminated before timeout."
-                );
-            }
-            Err(error) => {
-                tracing::error!(
-                    %error,
-                    id = p.id(),
-                    given_id = p.given_id(),
-                    "Error waiting for process."
-                );
-            }
+            Ok(output) => match output.status {
+                Status::TerminatedWithUnknownError => if cfg!(target_os = "linux") {},
+                Status::TerminatedWithError(_) => if cfg!(target_os = "windows") {},
+                Status::TerminatedSuccessfully => panic!("Unexpected status: {:?}", output.status),
+                _ => panic!("Uncovered case"),
+            },
+            _ => panic!("Error waiting for process."),
         }
     }
 
-    pub async fn run_numbers_script_with_more_timeout() {
-        let mut p = match create_numbers_process(Stdio::inherit()) {
-            Ok(p) => p,
-            Err(error) => {
-                tracing::error!(%error, "Error creating process.");
-                return;
-            }
-        };
-        match p
-            .wait_with_timeout_and_output_and_set_status(Duration::from_secs(10))
+    #[tokio::test]
+    #[traced_test]
+    async fn run_numbers_script_with_more_timeout() {
+        let mut numbers_process = create_numbers_process_with_panic();
+
+        match numbers_process
+            .wait_with_timeout_and_output_and_set_status(Duration::from_secs(5))
             .await
         {
-            Ok(output) => {
-                tracing::info!(
-                    id = p.id(),
-                    given_id = p.given_id(),
-                    ?output,
-                    "Process terminated before timeout."
-                );
-            }
-            Err(error) => {
-                tracing::error!(
-                    %error,
-                    id = p.id(),
-                    given_id = p.given_id(),
-                    "Error waiting for process."
-                );
-            }
+            Ok(output) => match output.status {
+                Status::TerminatedSuccessfully => {}
+                _ => panic!("unexpected status: {:?}", output.status),
+            },
+            _ => panic!("Error waiting for process."),
         }
-    }
-
-    pub async fn run_numbers_script_and_pipe_output_to_file(file: &str) {
-        let mut p = match create_numbers_process(Stdio::piped()) {
-            Ok(p) => p,
-            Err(error) => {
-                tracing::error!(%error, "Error creating process.");
-                return;
-            }
-        };
-        let stdout = p.stdout();
-
-        // Create a file to write the lines
-        let mut file = match tokio::fs::File::create(file).await {
-            Ok(file) => file,
-            Err(error) => {
-                tracing::error!(%error, "Error creating file.");
-                return;
-            }
-        };
-
-        tokio::spawn(async move {
-            if let Some(stdout) = stdout {
-                let reader = io::BufReader::new(stdout);
-                let mut lines = reader.lines();
-
-                while let Ok(Some(line)) = lines.next_line().await {
-                    file.write_all(line.as_bytes())
-                        .await
-                        .unwrap_or_else(|error| {
-                            tracing::error!(%error, "Error writing to file.");
-                        });
-                    file.write_all(b"\n").await.unwrap_or_else(|error| {
-                        tracing::error!(%error, "Error writing to file.");
-                    });
-                }
-            }
-        });
-
-        let _ = p
-            .wait_with_timeout_and_output_and_set_status(Duration::from_secs(10))
-            .await;
-    }
-
-    pub async fn run_numbers_script_and_pipe_output_console() {
-        let mut p = match create_numbers_process(Stdio::piped()) {
-            Ok(p) => p,
-            Err(error) => {
-                tracing::error!(%error, "Error creating process.");
-                return;
-            }
-        };
-        let stdout = p.stdout();
-
-        tokio::spawn(async move {
-            if let Some(stdout) = stdout {
-                let reader = io::BufReader::new(stdout);
-                let mut lines = reader.lines();
-
-                while let Ok(Some(line)) = lines.next_line().await {
-                    println!("{}", line);
-                }
-            }
-        });
-
-        let _ = p
-            .wait_with_timeout_and_output_and_set_status(Duration::from_secs(10))
-            .await;
-    }
-
-    pub async fn run_all() {
-        tracing::info!("Running all examples.");
-        tracing::info!("checking if python.exe exists.");
-        program_exists("python.exe").await;
-        tracing::info!("checking if python exists.");
-        program_exists("python").await;
-        tracing::info!("checking if someprogram.exe exists.");
-        program_exists("someprogram.exe").await;
-        tracing::info!("Running numbers script and killing before termination.");
-        run_numbers_script_and_kill_before_termination().await;
-        tracing::info!("Running numbers script and killing after termination.");
-        run_numbers_script_and_kill_after_termination().await;
-        tracing::info!("Running numbers script with less timeout.");
-        run_numbers_script_with_less_timeout().await;
-        tracing::info!("Running numbers script with more timeout.");
-        run_numbers_script_with_more_timeout().await;
-        tracing::info!("Running numbers script and piping output to file.");
-        run_numbers_script_and_pipe_output_to_file("numbers.txt").await;
-        tracing::info!("Running numbers script and piping output to console.");
-        run_numbers_script_and_pipe_output_console().await;
     }
 }

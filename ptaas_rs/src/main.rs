@@ -1,7 +1,4 @@
-use ptaas_rs::{
-    init_tracing,
-    project_managers::{process::dev::run_all as run_process_dev_examples, LocalProjectManager},
-};
+use ptaas_rs::{init_tracing, project_managers::LocalProjectManager};
 
 #[tokio::main]
 async fn main() {
@@ -24,6 +21,4 @@ async fn main() {
             std::process::exit(1);
         }
     };
-
-    run_process_dev_examples().await;
 }
