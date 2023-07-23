@@ -1,23 +1,13 @@
 use convertible::definitions::dart::dev as dart_dev;
 use ptaas_rs::{
+    init_tracing,
     models_2::print_dummies,
     project_managers::{process::dev::run_all as run_process_dev_examples, LocalProjectManager},
 };
-use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() {
-    if std::env::var_os("RUST_LOG").is_none() {
-        std::env::set_var("RUST_LOG", "ptaas_rs=trace,tower_http=off,hyper=off");
-    }
-
-    tracing_subscriber::fmt()
-        .with_target(false)
-        .with_timer(tracing_subscriber::fmt::time::UtcTime::rfc_3339())
-        .with_level(true)
-        .with_ansi(true)
-        .with_env_filter(EnvFilter::from_default_env())
-        .init();
+    init_tracing();
 
     let basic_auth_username = std::env::var("BASIC_AUTH_USERNAME").unwrap_or_else(|_| {
         tracing::warn!("BASIC_AUTH_USERNAME not set, using default value");

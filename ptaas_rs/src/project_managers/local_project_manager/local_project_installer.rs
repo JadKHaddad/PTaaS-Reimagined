@@ -13,12 +13,14 @@ use tokio::fs::{self, ReadDir};
 
 #[derive(Debug)]
 pub struct NewLocalProjectInstallerArgs {
+    pub id: String,
     pub uploaded_project_dir: PathBuf,
     pub installed_project_dir: PathBuf,
     pub project_env_dir: PathBuf,
 }
 
 pub struct LocalProjectInstaller {
+    id: String,
     uploaded_project_dir: PathBuf,
     installed_project_dir: PathBuf,
     project_env_dir: PathBuf,
@@ -31,12 +33,25 @@ impl LocalProjectInstaller {
     ) -> Result<Self, StartInstallError> {
         let process = Self::check_and_start_install(&new_local_project_installer_args).await?;
 
-        Ok(Self {
+        let mut installer = Self {
+            id: new_local_project_installer_args.id,
             uploaded_project_dir: new_local_project_installer_args.uploaded_project_dir,
             installed_project_dir: new_local_project_installer_args.installed_project_dir,
             project_env_dir: new_local_project_installer_args.project_env_dir,
             process,
-        })
+        };
+
+        installer
+            .do_pipe_stdout_to_file()
+            .await
+            .map_err(StartInstallError::CouldNotCreateStdoutFile)?;
+
+        installer
+            .do_pipe_stderr_to_file()
+            .await
+            .map_err(StartInstallError::CouldNotCreateStderrFile)?;
+
+        Ok(installer)
     }
 
     /// Returns the status of the underlying process, not the status of the installation.
@@ -75,6 +90,8 @@ impl LocalProjectInstaller {
             StartInstallError::FailedToConvertPathBufToString(requirements_file_path.clone()),
         )?;
 
+        let process_id = format!("install_{}", new_local_project_installer_args.id);
+
         let new_process = if cfg!(target_os = "windows") {
             let pip_path = project_env_dir.join("Scripts").join("pip3");
             let pip_path_str =
@@ -85,7 +102,7 @@ impl LocalProjectInstaller {
                     ))?;
 
             let new_process_args = NewProcessArgs {
-                given_id: None,
+                given_id: Some(process_id),
                 program: "cmd",
                 args: vec![
                     "/C",
@@ -100,9 +117,9 @@ impl LocalProjectInstaller {
                     requirements_file_path_str,
                 ],
                 current_dir: ".",
-                stdin: Stdio::inherit(),
-                stdout: Stdio::inherit(),
-                stderr: Stdio::inherit(),
+                stdin: Stdio::null(),
+                stdout: Stdio::piped(),
+                stderr: Stdio::piped(),
                 kill_on_drop: true,
             };
 
@@ -132,6 +149,14 @@ impl LocalProjectInstaller {
 
     fn get_locust_dir_path(uploaded_project_dir: &Path) -> PathBuf {
         uploaded_project_dir.join("locust")
+    }
+
+    fn get_process_out_file_path(&self) -> PathBuf {
+        self.uploaded_project_dir.join("out.txt")
+    }
+
+    fn get_process_err_file_path(&self) -> PathBuf {
+        self.uploaded_project_dir.join("err.txt")
     }
 
     /// A 'check' function fails if the project is not valid.
@@ -223,6 +248,18 @@ impl LocalProjectInstaller {
 
         Ok(())
     }
+
+    async fn do_pipe_stdout_to_file(&mut self) -> Result<(), IoError> {
+        self.process
+            .do_pipe_stdout_to_file(&self.get_process_out_file_path())
+            .await
+    }
+
+    async fn do_pipe_stderr_to_file(&mut self) -> Result<(), IoError> {
+        self.process
+            .do_pipe_stderr_to_file(&self.get_process_err_file_path())
+            .await
+    }
 }
 
 #[derive(ThisError, Debug)]
@@ -289,6 +326,10 @@ pub enum LocustDirError {
 
 #[derive(ThisError, Debug)]
 pub enum StartInstallError {
+    #[error("Could not create stdout file: {0}")]
+    CouldNotCreateStdoutFile(#[source] IoError),
+    #[error("Could not create stderr file: {0}")]
+    CouldNotCreateStderrFile(#[source] IoError),
     #[error("Could not convert path buf to string: {0}")]
     FailedToConvertPathBufToString(PathBuf),
     #[error("Project is not valid: {0}")]
@@ -351,6 +392,7 @@ impl From<DirExistsAndNotEmptyError> for LocustDirError {
 mod tests {
     use super::*;
     use std::path::Path;
+    use tracing_test::traced_test;
 
     const CRATE_DIR: &str = env!("CARGO_MANIFEST_DIR");
 
@@ -375,8 +417,10 @@ mod tests {
 
         fn create_project_installer_default_args(
             uploaded_project_dir: PathBuf,
+            id: String,
         ) -> NewLocalProjectInstallerArgs {
             NewLocalProjectInstallerArgs {
+                id,
                 uploaded_project_dir,
                 installed_project_dir: PathBuf::from(""),
                 project_env_dir: PathBuf::from(""),
@@ -384,9 +428,12 @@ mod tests {
         }
 
         #[tokio::test]
+        #[traced_test]
         pub async fn project_dir_does_not_exist() {
+            let project_id_and_dir = String::from("project_dir_does_not_exist");
             let installer_args = create_project_installer_default_args(
-                get_uploaded_projects_dir().join("project_dir_does_not_exist"),
+                get_uploaded_projects_dir().join(&project_id_and_dir),
+                project_id_and_dir,
             );
 
             match LocalProjectInstaller::check(&installer_args).await {
@@ -401,9 +448,13 @@ mod tests {
         }
 
         #[tokio::test]
+        #[traced_test]
         pub async fn project_dir_is_empty() {
-            let installer_args =
-                create_project_installer_default_args(get_uploaded_projects_dir().join("empty"));
+            let project_id_and_dir = String::from("empty");
+            let installer_args = create_project_installer_default_args(
+                get_uploaded_projects_dir().join(&project_id_and_dir),
+                project_id_and_dir,
+            );
 
             match LocalProjectInstaller::check(&installer_args).await {
                 Err(ProjectCheckError::ProjectDirError(ProjectDirError::ProjectDirIsEmpty)) => {}
@@ -415,9 +466,12 @@ mod tests {
         }
 
         #[tokio::test]
+        #[traced_test]
         pub async fn requirements_does_not_exist() {
+            let project_id_and_dir = String::from("requirements_does_not_exist");
             let installer_args = create_project_installer_default_args(
-                get_uploaded_projects_dir().join("requirements_does_not_exist"),
+                get_uploaded_projects_dir().join(&project_id_and_dir),
+                project_id_and_dir,
             );
 
             match LocalProjectInstaller::check(&installer_args).await {
@@ -432,9 +486,12 @@ mod tests {
         }
 
         #[tokio::test]
+        #[traced_test]
         pub async fn requirements_does_not_contain_locust() {
+            let project_id_and_dir = String::from("requirements_does_not_contain_locust");
             let installer_args = create_project_installer_default_args(
-                get_uploaded_projects_dir().join("requirements_does_not_contain_locust"),
+                get_uploaded_projects_dir().join(&project_id_and_dir),
+                project_id_and_dir,
             );
 
             match LocalProjectInstaller::check(&installer_args).await {
@@ -449,9 +506,12 @@ mod tests {
         }
 
         #[tokio::test]
+        #[traced_test]
         pub async fn locust_dir_does_not_exist() {
+            let project_id_and_dir = String::from("locust_dir_does_not_exist");
             let installer_args = create_project_installer_default_args(
-                get_uploaded_projects_dir().join("locust_dir_does_not_exist"),
+                get_uploaded_projects_dir().join(&project_id_and_dir),
+                project_id_and_dir,
             );
 
             match LocalProjectInstaller::check(&installer_args).await {
@@ -464,9 +524,12 @@ mod tests {
         }
 
         #[tokio::test]
+        #[traced_test]
         pub async fn locust_dir_is_empty() {
+            let project_id_and_dir = String::from("locust_dir_is_empty");
             let installer_args = create_project_installer_default_args(
-                get_uploaded_projects_dir().join("locust_dir_is_empty"),
+                get_uploaded_projects_dir().join(&project_id_and_dir),
+                project_id_and_dir,
             );
 
             match LocalProjectInstaller::check(&installer_args).await {
@@ -479,9 +542,12 @@ mod tests {
         }
 
         #[tokio::test]
+        #[traced_test]
         pub async fn locust_dir_contains_no_python_files() {
+            let project_id_and_dir = String::from("locust_dir_is_contains_no_python_files");
             let installer_args = create_project_installer_default_args(
-                get_uploaded_projects_dir().join("locust_dir_is_contains_no_python_files"),
+                get_uploaded_projects_dir().join(&project_id_and_dir),
+                project_id_and_dir,
             );
 
             match LocalProjectInstaller::check(&installer_args).await {
@@ -496,9 +562,13 @@ mod tests {
         }
 
         #[tokio::test]
+        #[traced_test]
         pub async fn valid() {
-            let installer_args =
-                create_project_installer_default_args(get_uploaded_projects_dir().join("valid"));
+            let project_id_and_dir = String::from("valid");
+            let installer_args = create_project_installer_default_args(
+                get_uploaded_projects_dir().join(&project_id_and_dir),
+                project_id_and_dir,
+            );
 
             match LocalProjectInstaller::check(&installer_args).await {
                 Ok(_) => {}
@@ -513,12 +583,15 @@ mod tests {
         use super::*;
 
         #[tokio::test]
+        #[traced_test]
         pub async fn invalid_requirements() {
-            let uploaded_project_dir = get_uploaded_projects_dir().join("invalid_requirements");
-            let installed_project_dir = get_installed_projects_dir().join("invalid_requirements");
-            let project_env_dir = get_environments_dir().join("invalid_requirements");
+            let project_id_and_dir = String::from("invalid_requirements");
+            let uploaded_project_dir = get_uploaded_projects_dir().join(&project_id_and_dir);
+            let installed_project_dir = get_installed_projects_dir().join(&project_id_and_dir);
+            let project_env_dir = get_environments_dir().join(&project_id_and_dir);
 
             let installer_args = NewLocalProjectInstallerArgs {
+                id: project_id_and_dir,
                 uploaded_project_dir,
                 installed_project_dir,
                 project_env_dir,
@@ -545,12 +618,16 @@ mod tests {
         }
 
         #[tokio::test]
+        #[traced_test]
         pub async fn killed() {
-            let uploaded_project_dir = get_uploaded_projects_dir().join("valid");
-            let installed_project_dir = get_installed_projects_dir().join("valid");
-            let project_env_dir = get_environments_dir().join("valid");
+            let project_id = String::from("killed");
+            let project_dir = String::from("valid");
+            let uploaded_project_dir = get_uploaded_projects_dir().join(&project_dir);
+            let installed_project_dir = get_installed_projects_dir().join(&project_dir);
+            let project_env_dir = get_environments_dir().join(&project_dir);
 
             let installer_args = NewLocalProjectInstallerArgs {
+                id: project_id,
                 uploaded_project_dir,
                 installed_project_dir,
                 project_env_dir,
@@ -584,12 +661,15 @@ mod tests {
         }
 
         #[tokio::test]
+        #[traced_test]
         pub async fn valid() {
-            let uploaded_project_dir = get_uploaded_projects_dir().join("valid");
-            let installed_project_dir = get_installed_projects_dir().join("valid");
-            let project_env_dir = get_environments_dir().join("valid");
+            let project_id_and_dir = String::from("valid");
+            let uploaded_project_dir = get_uploaded_projects_dir().join(&project_id_and_dir);
+            let installed_project_dir = get_installed_projects_dir().join(&project_id_and_dir);
+            let project_env_dir = get_environments_dir().join(&project_id_and_dir);
 
             let installer_args = NewLocalProjectInstallerArgs {
+                id: project_id_and_dir,
                 uploaded_project_dir,
                 installed_project_dir,
                 project_env_dir,

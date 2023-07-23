@@ -7,7 +7,11 @@ use std::{
 };
 
 use thiserror::Error as ThisError;
-use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
+use tokio::{
+    fs,
+    io::{self, AsyncBufReadExt, AsyncRead, AsyncWriteExt},
+    process::{Child, ChildStderr, ChildStdin, ChildStdout, Command},
+};
 
 #[derive(Debug, Clone)]
 pub enum Status {
@@ -247,6 +251,63 @@ impl Process {
 
     pub fn stderr(&mut self) -> Option<ChildStderr> {
         self.child.stderr.take()
+    }
+
+    async fn do_pipe_io_to_file<T: AsyncRead + Unpin + Send + 'static>(
+        given_id: Option<String>,
+        file_path: &Path,
+        io: Option<T>,
+    ) -> Result<(), IoError> {
+        let file_path_string = file_path
+            .to_str()
+            .unwrap_or_else(|| {
+                tracing::error!(
+                    given_id,
+                    ?file_path,
+                    "Error converting file path to string."
+                );
+                ""
+            })
+            .to_owned();
+
+        let mut file = fs::File::create(file_path).await?;
+
+        tokio::spawn(async move {
+            tracing::debug!(given_id, file = file_path_string, "Stream opened.");
+
+            if let Some(out) = io {
+                let reader = io::BufReader::new(out);
+                let mut lines = reader.lines();
+
+                while let Ok(Some(line)) = lines.next_line().await {
+                    file.write_all(line.as_bytes())
+                        .await
+                        .unwrap_or_else(|error| {
+                            tracing::error!(%error, given_id, file=file_path_string, "Error writing to file.");
+                        });
+
+                    file.write_all(b"\n").await.unwrap_or_else(|error| {
+                        tracing::error!(%error, given_id, file=file_path_string, "Error writing to file.");
+                    });
+                }
+
+                file.flush().await.unwrap_or_else(|error| {
+                    tracing::error!(%error, given_id, file=file_path_string, "Error flushing file.");
+                });
+
+                tracing::debug!(given_id, file = file_path_string, "Stream closed.");
+            }
+        });
+
+        Ok(())
+    }
+
+    pub async fn do_pipe_stdout_to_file(&mut self, file_path: &Path) -> Result<(), IoError> {
+        Process::do_pipe_io_to_file(self.given_id.clone(), file_path, self.stdout()).await
+    }
+
+    pub async fn do_pipe_stderr_to_file(&mut self, file_path: &Path) -> Result<(), IoError> {
+        Process::do_pipe_io_to_file(self.given_id.clone(), file_path, self.stderr()).await
     }
 }
 
