@@ -425,6 +425,18 @@ mod tests {
         get_tests_dir().join("environments")
     }
 
+    async fn delete_gitkeep(dir: &Path) {
+        tokio::fs::remove_file(dir.join(".gitkeep"))
+            .await
+            .expect("Could not delete .gitkeep");
+    }
+
+    async fn restore_gitkeep(dir: &Path) {
+        tokio::fs::File::create(dir.join(".gitkeep"))
+            .await
+            .expect("Could not restore .gitkeep");
+    }
+
     mod check_projects {
         use super::*;
 
@@ -464,17 +476,24 @@ mod tests {
         #[traced_test]
         pub async fn project_dir_is_empty() {
             let project_id_and_dir = String::from("empty");
+
+            delete_gitkeep(&get_uploaded_projects_dir().join(&project_id_and_dir)).await;
+
             let installer_args = create_project_installer_default_args(
                 get_uploaded_projects_dir().join(&project_id_and_dir),
-                project_id_and_dir,
+                project_id_and_dir.clone(),
             );
 
-            match LocalProjectInstaller::check(&installer_args).await {
-                Err(ProjectCheckError::ProjectDirError(ProjectDirError::ProjectDirIsEmpty)) => {}
-                Err(err) => {
-                    panic!("Unexpected error: {}", err);
-                }
-                _ => panic!("Unexpected result"),
+            let panic_msg = match LocalProjectInstaller::check(&installer_args).await {
+                Err(ProjectCheckError::ProjectDirError(ProjectDirError::ProjectDirIsEmpty)) => None,
+                Err(err) => Some(format!("Unexpected error: {}", err)),
+                _ => Some(String::from("Unexpected result")),
+            };
+
+            restore_gitkeep(&get_uploaded_projects_dir().join(&project_id_and_dir)).await;
+
+            if let Some(msg) = panic_msg {
+                panic!("{}", msg);
             }
         }
 
@@ -540,17 +559,27 @@ mod tests {
         #[traced_test]
         pub async fn locust_dir_is_empty() {
             let project_id_and_dir = String::from("locust_dir_is_empty");
+            let locust_dir = get_uploaded_projects_dir()
+                .join(&project_id_and_dir)
+                .join("locust");
+
+            delete_gitkeep(&locust_dir).await;
+
             let installer_args = create_project_installer_default_args(
                 get_uploaded_projects_dir().join(&project_id_and_dir),
                 project_id_and_dir,
             );
 
-            match LocalProjectInstaller::check(&installer_args).await {
-                Err(ProjectCheckError::LocustDirError(LocustDirError::LocustDirIsEmpty)) => {}
-                Err(err) => {
-                    panic!("Unexpected error: {}", err);
-                }
-                _ => panic!("Unexpected result"),
+            let panic_msg = match LocalProjectInstaller::check(&installer_args).await {
+                Err(ProjectCheckError::LocustDirError(LocustDirError::LocustDirIsEmpty)) => None,
+                Err(err) => Some(format!("Unexpected error: {}", err)),
+                _ => Some(String::from("Unexpected result")),
+            };
+
+            restore_gitkeep(&locust_dir).await;
+
+            if let Some(msg) = panic_msg {
+                panic!("{}", msg);
             }
         }
 
@@ -614,23 +643,26 @@ mod tests {
                 .await
                 .expect("Installation process failed to start");
 
-            let output = installer
-                .wait_process_with_output()
-                .await
-                .expect("Wait failed");
+            let output = installer.wait_process_with_output().await;
 
             installer
                 .delete_environment_dir_if_exists()
                 .await
                 .expect("Could not delete environment dir");
 
-            #[cfg(target_os = "windows")]
-            match output.status {
-                Status::TerminatedWithError(_) => {}
-                _ => panic!("Unexpected status: {:?}", output.status),
+            match output {
+                Ok(output) => {
+                    // TODO: Linux is exiting with 0, but it should not.
+                    #[cfg(target_os = "windows")]
+                    match output.status {
+                        Status::TerminatedWithError(_) => {}
+                        _ => panic!("Unexpected status: {:?}", output.status),
+                    }
+                }
+                Err(err) => {
+                    panic!("Could not wait for process: {}", err);
+                }
             }
-
-            // TODO: Linux is exiting with 0, but it should not.
         }
 
         #[tokio::test]
