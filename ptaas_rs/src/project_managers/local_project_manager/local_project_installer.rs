@@ -92,43 +92,56 @@ impl LocalProjectInstaller {
 
         let process_id = format!("install_{}", new_local_project_installer_args.id);
 
-        let new_process = if cfg!(target_os = "windows") {
-            let pip_path = project_env_dir.join("Scripts").join("pip3");
-            let pip_path_str =
-                pip_path
-                    .to_str()
-                    .ok_or(StartInstallError::FailedToConvertPathBufToString(
-                        pip_path.clone(),
-                    ))?;
+        let (program, pip_path, first_arg) = Self::create_os_specific_args(project_env_dir);
 
-            let new_process_args = NewProcessArgs {
-                given_id: Some(process_id),
-                program: "cmd",
-                args: vec![
-                    "/C",
-                    "python",
-                    "-m",
-                    "venv",
-                    project_env_dir_str,
-                    "&&",
-                    pip_path_str,
-                    "install",
-                    "-r",
-                    requirements_file_path_str,
-                ],
-                current_dir: ".",
-                stdin: Stdio::null(),
-                stdout: Stdio::piped(),
-                stderr: Stdio::piped(),
-                kill_on_drop: true,
-            };
+        let pip_path_str =
+            pip_path
+                .to_str()
+                .ok_or(StartInstallError::FailedToConvertPathBufToString(
+                    pip_path.clone(),
+                ))?;
 
-            Process::new(new_process_args)?
-        } else {
-            todo!();
+        let new_process_args = NewProcessArgs {
+            given_id: Some(process_id),
+            program,
+            args: vec![
+                first_arg,
+                "python3",
+                "-m",
+                "venv",
+                project_env_dir_str,
+                "&&",
+                pip_path_str,
+                "install",
+                "-r",
+                requirements_file_path_str,
+            ],
+            current_dir: ".",
+            stdin: Stdio::null(),
+            stdout: Stdio::piped(),
+            stderr: Stdio::piped(),
+            kill_on_drop: true,
         };
 
-        Ok(new_process)
+        Ok(Process::new(new_process_args)?)
+    }
+
+    fn create_os_specific_args(project_env_dir: &Path) -> (&str, PathBuf, &str) {
+        let (program, pip_path, first_arg) = if cfg!(target_os = "windows") {
+            let program = "cmd";
+            let pip_path = project_env_dir.join("Scripts").join("pip3");
+            let first_first_arg = "/C";
+
+            (program, pip_path, first_first_arg)
+        } else {
+            let program = "bash";
+            let pip_path = project_env_dir.join("bin").join("pip3");
+            let first_first_arg = "-c";
+
+            (program, pip_path, first_first_arg)
+        };
+
+        (program, pip_path, first_arg)
     }
 
     async fn delete_environment_dir_if_exists(&self) -> Result<(), IoError> {
