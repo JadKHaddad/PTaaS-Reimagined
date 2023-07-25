@@ -606,11 +606,8 @@ mod tests {
                 project_id_and_dir,
             );
 
-            match LocalProjectInstaller::check(&installer_args).await {
-                Ok(_) => {}
-                Err(err) => {
-                    panic!("Unexpected error: {}", err);
-                }
+            if let Err(err) = LocalProjectInstaller::check(&installer_args).await {
+                panic!("Unexpected error: {}", err);
             }
         }
     }
@@ -675,25 +672,29 @@ mod tests {
                 .await
                 .expect("Installation process failed to start");
 
-            installer
-                .stop()
-                .await
-                .expect("Could not stop installation process");
+            let stop_result = installer.stop().await;
 
-            let output = installer
-                .wait_process_with_output()
-                .await
-                .expect("Wait failed");
+            let output_result = installer.wait_process_with_output().await;
 
             installer
                 .delete_environment_dir_if_exists()
                 .await
                 .expect("Could not delete environment dir");
 
+            if let Err(err) = stop_result {
+                panic!("Could not stop process: {}", err);
+            }
+
+            let Ok(output) = output_result else {
+                panic!("Could not wait for process");
+            };
+
             match output.status {
                 Status::TerminatedWithUnknownError => if cfg!(target_os = "linux") {},
                 Status::TerminatedWithError(_) => if cfg!(target_os = "windows") {},
-                Status::TerminatedSuccessfully => panic!("Unexpected status: {:?}", output.status),
+                Status::TerminatedSuccessfully => {
+                    panic!("Unexpected status: {:?}", output.status)
+                }
                 _ => panic!("Uncovered case"),
             }
         }
@@ -717,15 +718,16 @@ mod tests {
                 .await
                 .expect("Installation process failed to start");
 
-            let output = installer
-                .wait_process_with_output()
-                .await
-                .expect("Wait failed");
+            let output_result = installer.wait_process_with_output().await;
 
             installer
                 .delete_environment_dir_if_exists()
                 .await
                 .expect("Could not delete environment dir");
+
+            let Ok(output) = output_result else {
+                panic!("Could not wait for process");
+            };
 
             match output.status {
                 Status::TerminatedSuccessfully => {}

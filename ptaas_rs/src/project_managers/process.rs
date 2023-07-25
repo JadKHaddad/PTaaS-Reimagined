@@ -460,7 +460,7 @@ mod tests {
                 Status::TerminatedSuccessfully => panic!("Unexpected status: {:?}", status),
                 _ => panic!("Uncovered case"),
             },
-            _ => panic!("Error getting status."),
+            Err(e) => panic!("Error getting status: {:?}", e),
         }
     }
 
@@ -481,7 +481,7 @@ mod tests {
                 Status::TerminatedSuccessfully => {}
                 _ => panic!("Unexpected status: {:?}", status),
             },
-            _ => panic!("Error getting status."),
+            Err(e) => panic!("Error getting status: {:?}", e),
         }
     }
 
@@ -500,7 +500,7 @@ mod tests {
                 Status::TerminatedSuccessfully => panic!("Unexpected status: {:?}", output.status),
                 _ => panic!("Uncovered case"),
             },
-            _ => panic!("Error waiting for process."),
+            Err(e) => panic!("Error waiting for process: {:?}", e),
         }
     }
 
@@ -517,7 +517,7 @@ mod tests {
                 Status::TerminatedSuccessfully => {}
                 _ => panic!("unexpected status: {:?}", output.status),
             },
-            _ => panic!("Error waiting for process."),
+            Err(e) => panic!("Error waiting for process: {:?}", e),
         }
     }
 
