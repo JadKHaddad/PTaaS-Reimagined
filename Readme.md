@@ -5,11 +5,12 @@
 
 ## System
 - [ ] Backend
+    - [ ] Prometheus metrics: for trafic and performance
     - [ ] Databases
         - [ ] Json
         - [ ] Sqlite
         - [ ] Postgres
-    - [ ] Project managers
+    - [ ] Project managers: with Prometheus metrics for projects and tests statistics
         - [ ] Local project manager: standalone
         - [ ] Distributed Local project manager: with local dispatcher
         - [ ] Docker project manager: standalone
@@ -23,7 +24,7 @@
         - [ ] K8s dispatcher
     - [ ] Connection manager
     - [ ] Script runner
-- [ ] Script runner cli: standalone
+- [ ] Script runner cli: standalone: with a server to export results
 - [ ] API models converter
 - [ ] Frontend
     - [ ] API
