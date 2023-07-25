@@ -1,7 +1,8 @@
 # PTaaS - Performance Testing as a Service
+Test your SUT's (System Under Test) performance using Locust scripts.
 
 ## Description
-
+This project is a reimplementation of [Rust-Performance-Testing-as-a-Service](https://github.com/JadKHaddad/Rust-Performance-Testing-as-a-Service) and [Openfaas-Performance-Testing-as-a-Service](https://github.com/JadKHaddad/Openfaas-Performance-Testing-as-a-Service) focused on extensibility, scalability, modularity and flexibility. The backend is written completely in Rust to ensure performance and safety. The frontend is written with flutter to ensure cross platform compatibility and flexibility.
 
 ## System
 - [ ] Backend
