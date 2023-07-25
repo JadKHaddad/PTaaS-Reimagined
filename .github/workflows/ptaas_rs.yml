@@ -27,7 +27,7 @@ jobs:
         run: sudo apt update
 
       - name: Install python3
-        run: sudo apt install -y python3
+        run: sudo apt install -y python3.11 python3.11-venv
 
       - name: Build
         run: cargo build --verbose

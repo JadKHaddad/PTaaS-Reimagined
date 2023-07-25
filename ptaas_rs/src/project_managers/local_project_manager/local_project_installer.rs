@@ -101,21 +101,15 @@ impl LocalProjectInstaller {
                     pip_path.clone(),
                 ))?;
 
+        let install_cmd = format!(
+            "python3 -m venv {} && {} install -r {}",
+            project_env_dir_str, pip_path_str, requirements_file_path_str
+        );
+
         let new_process_args = NewProcessArgs {
             given_id: Some(process_id),
             program,
-            args: vec![
-                first_arg,
-                "python3",
-                "-m",
-                "venv",
-                project_env_dir_str,
-                "&&",
-                pip_path_str,
-                "install",
-                "-r",
-                requirements_file_path_str,
-            ],
+            args: vec![first_arg, &install_cmd],
             current_dir: ".",
             stdin: Stdio::null(),
             stdout: Stdio::piped(),
@@ -651,14 +645,10 @@ mod tests {
                 .expect("Could not delete environment dir");
 
             match output {
-                Ok(output) => {
-                    // TODO: Linux is exiting with 0, but it should not.
-                    #[cfg(target_os = "windows")]
-                    match output.status {
-                        Status::TerminatedWithError(_) => {}
-                        _ => panic!("Unexpected status: {:?}", output.status),
-                    }
-                }
+                Ok(output) => match output.status {
+                    Status::TerminatedWithError(_) => {}
+                    _ => panic!("Unexpected status: {:?}", output.status),
+                },
                 Err(err) => {
                     panic!("Could not wait for process: {}", err);
                 }
