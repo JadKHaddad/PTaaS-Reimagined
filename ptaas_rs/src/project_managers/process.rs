@@ -323,8 +323,6 @@ impl Drop for Process {
     }
 }
 
-// TODO: Add "linux" tests.
-#[cfg(target_os = "windows")]
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -339,23 +337,45 @@ mod tests {
     }
 
     fn get_numbers_script_path() -> PathBuf {
-        get_tests_dir().join("numbers.ps1")
+        if cfg!(target_os = "linux") {
+            return get_tests_dir().join("numbers.sh");
+        } else if cfg!(target_os = "windows") {
+            return get_tests_dir().join("numbers.ps1");
+        }
+        panic!("Uncovered target_os.");
     }
 
-    fn create_numbers_process(
+    fn get_numbers_script_with_error_code_path() -> PathBuf {
+        if cfg!(target_os = "linux") {
+            return get_tests_dir().join("numbers_with_error_code.sh");
+        } else if cfg!(target_os = "windows") {
+            return get_tests_dir().join("numbers_with_error_code.ps1");
+        }
+        panic!("Uncovered target_os.");
+    }
+
+    fn program() -> &'static str {
+        if cfg!(target_os = "linux") {
+            return "bash";
+        } else if cfg!(target_os = "windows") {
+            return "powershell.exe";
+        }
+        panic!("Uncovered target_os.");
+    }
+
+    fn create_process(
+        given_id: Option<String>,
+        program: &str,
+        path: &Path,
         stdin: Stdio,
         stdout: Stdio,
         stderr: Stdio,
     ) -> Result<Process, ProcessCreateError> {
-        let numbers_script_path = get_numbers_script_path();
-        let numbers_script_path_str = numbers_script_path
-            .to_str()
-            .expect("Error converting path to string.");
-
+        let path_str = path.to_str().expect("Error converting path to string.");
         let args = NewProcessArgs {
-            given_id: Some("numbers.ps1".into()),
-            program: "powershell.exe",
-            args: vec![numbers_script_path_str],
+            given_id,
+            program,
+            args: vec![path_str],
             current_dir: ".",
             stdin,
             stdout,
@@ -366,24 +386,45 @@ mod tests {
         Process::new(args)
     }
 
-    fn create_non_existing_process() -> Result<Process, ProcessCreateError> {
-        let args = NewProcessArgs {
-            given_id: Some("non_existing_process".into()),
-            program: "non_existing_process",
-            args: vec![],
-            current_dir: ".",
-            stdin: Stdio::null(),
-            stdout: Stdio::null(),
-            stderr: Stdio::null(),
-            kill_on_drop: true,
-        };
+    fn create_numbers_process() -> Result<Process, ProcessCreateError> {
+        create_process(
+            Some("numbers_process".into()),
+            program(),
+            &get_numbers_script_path(),
+            Stdio::null(),
+            Stdio::null(),
+            Stdio::null(),
+        )
+    }
 
-        Process::new(args)
+    fn create_numbers_with_error_code_process() -> Result<Process, ProcessCreateError> {
+        create_process(
+            Some("numbers_with_error_code_process".into()),
+            program(),
+            &get_numbers_script_with_error_code_path(),
+            Stdio::null(),
+            Stdio::null(),
+            Stdio::null(),
+        )
     }
 
     fn create_numbers_process_with_panic() -> Process {
-        create_numbers_process(Stdio::null(), Stdio::null(), Stdio::null())
-            .expect("Error creating process.")
+        create_numbers_process().expect("Error creating process.")
+    }
+
+    fn create_numbers_with_error_code_process_with_panic() -> Process {
+        create_numbers_with_error_code_process().expect("Error creating process.")
+    }
+
+    fn create_non_existing_process() -> Result<Process, ProcessCreateError> {
+        create_process(
+            Some("non_existing_process".into()),
+            "non_existing_process",
+            &Path::new("non_existing_process"),
+            Stdio::null(),
+            Stdio::null(),
+            Stdio::null(),
+        )
     }
 
     #[tokio::test]
@@ -477,6 +518,22 @@ mod tests {
                 _ => panic!("unexpected status: {:?}", output.status),
             },
             _ => panic!("Error waiting for process."),
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn run_numbers_script_with_error_code() {
+        let mut numbers_process = create_numbers_with_error_code_process_with_panic();
+
+        match numbers_process.wait_with_output_and_set_status().await {
+            Ok(output) => match output.status {
+                Status::TerminatedWithError(code) => {
+                    assert_eq!(code, 1);
+                }
+                _ => panic!("Unexpected status: {:?}", output.status),
+            },
+            Err(e) => panic!("Error waiting for process: {:?}", e),
         }
     }
 }
