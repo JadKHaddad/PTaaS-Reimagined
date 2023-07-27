@@ -55,17 +55,11 @@ impl LocalProjectInstaller {
         if let Err(create_file_error) = installer
             .create_file_and_do_pipe_oi()
             .await
-            .map_err(StartInstallError::CreateFileError)
+            .map_err(ErrorThatTriggersCleanUp::CreateFileError)
         {
-            installer
-                .clean_up_on_error()
-                .await
-                .map_err(|clean_up_error| {
-                    CreateAndStartInstallError::CleanUpError(create_file_error, clean_up_error)
-                })?;
-
-            // TODO
-            // return Err(create_file_error.into());
+            return Err(installer
+                .clean_up_on_error_and_return_error(create_file_error)
+                .await);
         }
 
         Ok(installer)
@@ -345,6 +339,18 @@ impl LocalProjectInstaller {
             .map_err(CleanUpError::CouldNotDeleteEnvironment)?;
         Ok(())
     }
+
+    /// If an error occurs during the clean up, a `CleanUpError` is returned.
+    /// If no error occurs during the clean up, the given error mapped to a `CreateAndStartInstallError` is returned.
+    async fn clean_up_on_error_and_return_error(
+        &mut self,
+        error: ErrorThatTriggersCleanUp,
+    ) -> CreateAndStartInstallError {
+        match self.clean_up_on_error().await {
+            Ok(_) => StartInstallError::ErrorThatTriggersCleanUp(error).into(),
+            Err(clean_up_error) => CreateAndStartInstallError::CleanUpError(error, clean_up_error),
+        }
+    }
 }
 
 #[derive(ThisError, Debug)]
@@ -418,19 +424,11 @@ pub enum CreateAndStartInstallError {
         StartInstallError,
     ),
     #[error("An error occurred: {0}, and could not clean up: {1}")]
-    CleanUpError(StartInstallError, #[source] CleanUpError),
+    CleanUpError(ErrorThatTriggersCleanUp, #[source] CleanUpError),
 }
 
 #[derive(ThisError, Debug)]
 pub enum StartInstallError {
-    #[error("Error pipine to file: {0}")]
-    CreateFileError(
-        #[from]
-        #[source]
-        CreateFileError,
-    ),
-    #[error("Could not create stderr file: {0}")]
-    CouldNotCreateStderrFile(#[source] IoError),
     #[error("Could not convert path buf to string: {0}")]
     FailedToConvertPathBufToString(PathBuf),
     #[error("Project is not valid: {0}")]
@@ -444,6 +442,22 @@ pub enum StartInstallError {
         #[from]
         #[source]
         ProcessCreateError,
+    ),
+    #[error("{0}")]
+    ErrorThatTriggersCleanUp(
+        #[from]
+        #[source]
+        ErrorThatTriggersCleanUp,
+    ),
+}
+
+#[derive(ThisError, Debug)]
+pub enum ErrorThatTriggersCleanUp {
+    #[error("Could not create file: {0}")]
+    CreateFileError(
+        #[from]
+        #[source]
+        CreateFileError,
     ),
 }
 
