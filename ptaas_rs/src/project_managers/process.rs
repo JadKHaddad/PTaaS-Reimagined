@@ -226,6 +226,7 @@ impl Process {
     /// If you want to use these values, use the returned `Output` instead.
     /// Depending on tokio's implementation of `select!`,
     /// it should not be possible to kill the process after it has terminated.
+    #[cfg(test)]
     pub async fn wait_with_timeout_and_output_and_set_status(
         &mut self,
         duration: Duration,

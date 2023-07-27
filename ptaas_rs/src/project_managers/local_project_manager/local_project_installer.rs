@@ -76,6 +76,7 @@ impl LocalProjectInstaller {
             .await
     }
 
+    #[cfg(test)]
     async fn wait_process_with_output(&mut self) -> Result<Output, IoError> {
         self.process.wait_with_output_and_set_status().await
     }
