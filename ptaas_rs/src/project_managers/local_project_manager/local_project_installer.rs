@@ -45,7 +45,7 @@ impl LocalProjectInstaller {
         };
 
         installer
-            .do_pip_oi_to_files()
+            .do_pipe_oi_to_files()
             .await
             .map_err(StartInstallError::PipeToFileError)?;
 
@@ -90,8 +90,6 @@ impl LocalProjectInstaller {
             StartInstallError::FailedToConvertPathBufToString(requirements_file_path.clone()),
         )?;
 
-        let process_id = format!("install_{}", new_local_project_installer_args.id);
-
         let OsSpecificArgs {
             program,
             pip_path,
@@ -105,10 +103,13 @@ impl LocalProjectInstaller {
                     pip_path.clone(),
                 ))?;
 
-        let install_cmd = format!(
-            "python3 -m venv {} && {} install -r {}",
-            project_env_dir_str, pip_path_str, requirements_file_path_str
+        let install_cmd = Self::create_install_cmd(
+            project_env_dir_str,
+            pip_path_str,
+            requirements_file_path_str,
         );
+
+        let process_id = Self::create_process_id(&new_local_project_installer_args.id);
 
         let new_process_args = NewProcessArgs {
             given_id: Some(process_id),
@@ -122,6 +123,21 @@ impl LocalProjectInstaller {
         };
 
         Ok(Process::create_and_run(new_process_args)?)
+    }
+
+    fn create_process_id(id: &str) -> String {
+        format!("install_{}", id)
+    }
+
+    fn create_install_cmd(
+        project_env_dir_str: &str,
+        pip_path_str: &str,
+        requirements_file_path_str: &str,
+    ) -> String {
+        format!(
+            "python3 -m venv {} && {} install -r {}",
+            project_env_dir_str, pip_path_str, requirements_file_path_str
+        )
     }
 
     fn create_os_specific_args(project_env_dir: &Path) -> OsSpecificArgs {
@@ -264,9 +280,8 @@ impl LocalProjectInstaller {
         Ok(())
     }
 
-    async fn do_pip_oi_to_files(&mut self) -> Result<(), PipeToFileError> {
+    async fn do_pipe_oi_to_files(&mut self) -> Result<(), PipeToFileError> {
         self.do_pipe_stdout_to_file().await?;
-
         self.do_pipe_stderr_to_file().await
     }
 
