@@ -5,7 +5,10 @@ use std::{
 };
 
 use crate::project_managers::{
-    process::{NewProcessArgs, Output, ProcessCreateError, ProcessKillAndWaitError, Status},
+    process::{
+        NewProcessArgs, Output, PipeToFileError, ProcessCreateError, ProcessKillAndWaitError,
+        Status,
+    },
     Process,
 };
 use thiserror::Error as ThisError;
@@ -42,14 +45,11 @@ impl LocalProjectInstaller {
         };
 
         installer
-            .do_pipe_stdout_to_file()
+            .do_pip_oi_to_files()
             .await
-            .map_err(StartInstallError::CouldNotCreateStdoutFile)?;
+            .map_err(StartInstallError::PipeToFileError)?;
 
-        installer
-            .do_pipe_stderr_to_file()
-            .await
-            .map_err(StartInstallError::CouldNotCreateStderrFile)?;
+        // TODO: if failed to pipe to file, do cleanup: stop process, delete environment dir
 
         Ok(installer)
     }
@@ -264,13 +264,19 @@ impl LocalProjectInstaller {
         Ok(())
     }
 
-    async fn do_pipe_stdout_to_file(&mut self) -> Result<(), IoError> {
+    async fn do_pip_oi_to_files(&mut self) -> Result<(), PipeToFileError> {
+        self.do_pipe_stdout_to_file().await?;
+
+        self.do_pipe_stderr_to_file().await
+    }
+
+    async fn do_pipe_stdout_to_file(&mut self) -> Result<(), PipeToFileError> {
         self.process
             .do_pipe_stdout_to_file(&self.get_process_out_file_path())
             .await
     }
 
-    async fn do_pipe_stderr_to_file(&mut self) -> Result<(), IoError> {
+    async fn do_pipe_stderr_to_file(&mut self) -> Result<(), PipeToFileError> {
         self.process
             .do_pipe_stderr_to_file(&self.get_process_err_file_path())
             .await
@@ -347,8 +353,12 @@ pub enum LocustDirError {
 
 #[derive(ThisError, Debug)]
 pub enum StartInstallError {
-    #[error("Could not create stdout file: {0}")]
-    CouldNotCreateStdoutFile(#[source] IoError),
+    #[error("Error pipine to file: {0}")]
+    PipeToFileError(
+        #[from]
+        #[source]
+        PipeToFileError,
+    ),
     #[error("Could not create stderr file: {0}")]
     CouldNotCreateStderrFile(#[source] IoError),
     #[error("Could not convert path buf to string: {0}")]

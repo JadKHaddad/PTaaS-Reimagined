@@ -1,7 +1,7 @@
 use std::{
     ffi::OsStr,
     io::Error as IoError,
-    path::Path,
+    path::{Path, PathBuf},
     process::{ExitStatus, Stdio},
     time::Duration,
 };
@@ -76,6 +76,18 @@ pub enum ProcessKillAndWaitError {
     CouldNotKillProcess(#[source] IoError),
     #[error("Could not wait for process: {0}")]
     CouldNotWaitForProcess(#[source] IoError),
+}
+
+#[derive(ThisError, Debug)]
+pub enum PipeToFileError {
+    #[error("Could not create file: {0}")]
+    CouldNotCreateFile(
+        #[source]
+        #[from]
+        IoError,
+    ),
+    #[error("Could not convert path buf to string: {0}")]
+    FailedToConvertPathBufToString(PathBuf),
 }
 
 /// Ensure killing the process before dropping it.
@@ -280,17 +292,10 @@ impl Process {
         given_id: Option<String>,
         file_path: &Path,
         io: Option<T>,
-    ) -> Result<(), IoError> {
+    ) -> Result<(), PipeToFileError> {
         let file_path_string = file_path
             .to_str()
-            .unwrap_or_else(|| {
-                tracing::error!(
-                    given_id,
-                    ?file_path,
-                    "Error converting file path to string."
-                );
-                ""
-            })
+            .ok_or_else(|| PipeToFileError::FailedToConvertPathBufToString(file_path.to_owned()))?
             .to_owned();
 
         let mut file = fs::File::create(file_path).await?;
@@ -325,11 +330,17 @@ impl Process {
         Ok(())
     }
 
-    pub async fn do_pipe_stdout_to_file(&mut self, file_path: &Path) -> Result<(), IoError> {
+    pub async fn do_pipe_stdout_to_file(
+        &mut self,
+        file_path: &Path,
+    ) -> Result<(), PipeToFileError> {
         Process::do_pipe_io_to_file(self.given_id.clone(), file_path, self.stdout()).await
     }
 
-    pub async fn do_pipe_stderr_to_file(&mut self, file_path: &Path) -> Result<(), IoError> {
+    pub async fn do_pipe_stderr_to_file(
+        &mut self,
+        file_path: &Path,
+    ) -> Result<(), PipeToFileError> {
         Process::do_pipe_io_to_file(self.given_id.clone(), file_path, self.stderr()).await
     }
 }
