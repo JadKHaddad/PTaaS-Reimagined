@@ -16,9 +16,20 @@ use tokio::{
 #[derive(Debug, Clone)]
 pub enum Status {
     Running,
+    /// Explicitly killed by this library.
+    Killed,
     TerminatedSuccessfully,
-    TerminatedWithError(i32),
-    TerminatedWithUnknownError,
+    TerminatedWithError(TerminationWithErrorStatus),
+}
+
+#[derive(Debug, Clone)]
+pub enum TerminationWithErrorStatus {
+    /// On SIGTERM, the process will exit UnknownErrorCode.
+    /// On windows, the process will exit with 1. This will be translated to `Killed` if `child_killed_successfuly` is true.
+    /// On linux, the process will exit with UnknownErrorCode. This will be translated to `Killed` if `child_killed_successfuly` is true.
+    /// Otherwise, it will not be translated.
+    TerminatedWithUnknownErrorCode,
+    TerminatedWithErrorCode(i32),
 }
 
 #[derive(Debug)]
@@ -69,7 +80,7 @@ pub enum ProcessKillAndWaitError {
 
 /// Ensure killing the process before dropping it.
 impl Process {
-    pub fn new<I, S, P, T>(
+    pub fn create_and_run<I, S, P, T>(
         new_process_args: NewProcessArgs<I, S, P, T>,
     ) -> Result<Self, ProcessCreateError>
     where
@@ -171,11 +182,23 @@ impl Process {
             self.status = Status::TerminatedSuccessfully;
         } else {
             match ex_status.code() {
-                Some(code) => {
-                    self.status = Status::TerminatedWithError(code);
+                Some(code) => match code {
+                    1 if cfg!(target_os = "windows") && self.child_killed_successfuly => {
+                        self.status = Status::Killed;
+                    }
+                    _ => {
+                        self.status = Status::TerminatedWithError(
+                            TerminationWithErrorStatus::TerminatedWithErrorCode(code),
+                        );
+                    }
+                },
+                None if cfg!(target_os = "linux") && self.child_killed_successfuly => {
+                    self.status = Status::Killed;
                 }
-                None => {
-                    self.status = Status::TerminatedWithUnknownError;
+                _ => {
+                    self.status = Status::TerminatedWithError(
+                        TerminationWithErrorStatus::TerminatedWithUnknownErrorCode,
+                    );
                 }
             }
         }
@@ -383,7 +406,7 @@ mod tests {
             kill_on_drop: true,
         };
 
-        Process::new(args)
+        Process::create_and_run(args)
     }
 
     fn create_numbers_process() -> Result<Process, ProcessCreateError> {
@@ -420,7 +443,7 @@ mod tests {
         create_process(
             Some("non_existing_process".into()),
             "non_existing_process",
-            &Path::new("non_existing_process"),
+            Path::new("non_existing_process"),
             Stdio::null(),
             Stdio::null(),
             Stdio::null(),
@@ -455,10 +478,8 @@ mod tests {
 
         match numbers_process.status() {
             Ok(status) => match status {
-                Status::TerminatedWithUnknownError => if cfg!(target_os = "linux") {},
-                Status::TerminatedWithError(_) => if cfg!(target_os = "windows") {},
-                Status::TerminatedSuccessfully => panic!("Unexpected status: {:?}", status),
-                _ => panic!("Uncovered case"),
+                Status::Killed => {}
+                _ => panic!("Unexpected status: {:?}", status),
             },
             Err(e) => panic!("Error getting status: {:?}", e),
         }
@@ -495,10 +516,8 @@ mod tests {
             .await
         {
             Ok(output) => match output.status {
-                Status::TerminatedWithUnknownError => if cfg!(target_os = "linux") {},
-                Status::TerminatedWithError(_) => if cfg!(target_os = "windows") {},
-                Status::TerminatedSuccessfully => panic!("Unexpected status: {:?}", output.status),
-                _ => panic!("Uncovered case"),
+                Status::Killed => {}
+                _ => panic!("Unexpected status: {:?}", output.status),
             },
             Err(e) => panic!("Error waiting for process: {:?}", e),
         }
@@ -528,7 +547,9 @@ mod tests {
 
         match numbers_process.wait_with_output_and_set_status().await {
             Ok(output) => match output.status {
-                Status::TerminatedWithError(code) => {
+                Status::TerminatedWithError(
+                    TerminationWithErrorStatus::TerminatedWithErrorCode(code),
+                ) => {
                     assert_eq!(code, 1);
                 }
                 _ => panic!("Unexpected status: {:?}", output.status),

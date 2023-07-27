@@ -1,2 +1,3 @@
-  DEPRECATION: roundrobin is being installed using the legacy 'setup.py install' method, because it does not have a 'pyproject.toml' and the 'wheel' package is not installed. pip 23.1 will enforce this behaviour change. A possible replacement is to enable the '--use-pep517' option. Discussion can be found at https://github.com/pypa/pip/issues/8559
-  DEPRECATION: Flask-BasicAuth is being installed using the legacy 'setup.py install' method, because it does not have a 'pyproject.toml' and the 'wheel' package is not installed. pip 23.1 will enforce this behaviour change. A possible replacement is to enable the '--use-pep517' option. Discussion can be found at https://github.com/pypa/pip/issues/8559
+
+[notice] A new release of pip is available: 23.1.2 -> 23.2.1
+[notice] To update, run: C:\Users\JadKHaddad\Desktop\Projects\PTaaS-Reimagined\ptaas_rs\tests_dir\environments\valid\Scripts\python.exe -m pip install --upgrade pip

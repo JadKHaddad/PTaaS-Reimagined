@@ -28,7 +28,7 @@ pub struct LocalProjectInstaller {
 }
 
 impl LocalProjectInstaller {
-    pub async fn new(
+    pub async fn create_and_check_and_start_install(
         new_local_project_installer_args: NewLocalProjectInstallerArgs,
     ) -> Result<Self, StartInstallError> {
         let process = Self::check_and_start_install(&new_local_project_installer_args).await?;
@@ -92,7 +92,11 @@ impl LocalProjectInstaller {
 
         let process_id = format!("install_{}", new_local_project_installer_args.id);
 
-        let (program, pip_path, first_arg) = Self::create_os_specific_args(project_env_dir);
+        let OsSpecificArgs {
+            program,
+            pip_path,
+            first_arg,
+        } = Self::create_os_specific_args(project_env_dir);
 
         let pip_path_str =
             pip_path
@@ -117,10 +121,10 @@ impl LocalProjectInstaller {
             kill_on_drop: true,
         };
 
-        Ok(Process::new(new_process_args)?)
+        Ok(Process::create_and_run(new_process_args)?)
     }
 
-    fn create_os_specific_args(project_env_dir: &Path) -> (&str, PathBuf, &str) {
+    fn create_os_specific_args(project_env_dir: &Path) -> OsSpecificArgs {
         let (program, pip_path, first_arg) = if cfg!(target_os = "windows") {
             let program = "cmd";
             let pip_path = project_env_dir.join("Scripts").join("pip3");
@@ -135,7 +139,11 @@ impl LocalProjectInstaller {
             (program, pip_path, first_first_arg)
         };
 
-        (program, pip_path, first_arg)
+        OsSpecificArgs {
+            program,
+            pip_path,
+            first_arg,
+        }
     }
 
     async fn delete_environment_dir_if_exists(&self) -> Result<(), IoError> {
@@ -267,6 +275,12 @@ impl LocalProjectInstaller {
             .do_pipe_stderr_to_file(&self.get_process_err_file_path())
             .await
     }
+}
+
+struct OsSpecificArgs {
+    program: &'static str,
+    pip_path: PathBuf,
+    first_arg: &'static str,
 }
 
 #[derive(ThisError, Debug)]
@@ -613,6 +627,8 @@ mod tests {
     }
 
     mod install_projects {
+        use crate::project_managers::process::TerminationWithErrorStatus;
+
         use super::*;
 
         #[tokio::test]
@@ -630,9 +646,10 @@ mod tests {
                 project_env_dir,
             };
 
-            let mut installer = LocalProjectInstaller::new(installer_args)
-                .await
-                .expect("Installation process failed to start");
+            let mut installer =
+                LocalProjectInstaller::create_and_check_and_start_install(installer_args)
+                    .await
+                    .expect("Installation process failed to start");
 
             let output = installer.wait_process_with_output().await;
 
@@ -643,7 +660,11 @@ mod tests {
 
             match output {
                 Ok(output) => match output.status {
-                    Status::TerminatedWithError(_) => {}
+                    Status::TerminatedWithError(
+                        TerminationWithErrorStatus::TerminatedWithErrorCode(code),
+                    ) => {
+                        assert_eq!(code, 1);
+                    }
                     _ => panic!("Unexpected status: {:?}", output.status),
                 },
                 Err(err) => {
@@ -668,9 +689,10 @@ mod tests {
                 project_env_dir,
             };
 
-            let mut installer = LocalProjectInstaller::new(installer_args)
-                .await
-                .expect("Installation process failed to start");
+            let mut installer =
+                LocalProjectInstaller::create_and_check_and_start_install(installer_args)
+                    .await
+                    .expect("Installation process failed to start");
 
             let stop_result = installer.stop().await;
 
@@ -690,12 +712,8 @@ mod tests {
             };
 
             match output.status {
-                Status::TerminatedWithUnknownError => if cfg!(target_os = "linux") {},
-                Status::TerminatedWithError(_) => if cfg!(target_os = "windows") {},
-                Status::TerminatedSuccessfully => {
-                    panic!("Unexpected status: {:?}", output.status)
-                }
-                _ => panic!("Uncovered case"),
+                Status::Killed => {}
+                _ => panic!("Unexpected status: {:?}", output.status),
             }
         }
 
@@ -714,9 +732,10 @@ mod tests {
                 project_env_dir,
             };
 
-            let mut installer = LocalProjectInstaller::new(installer_args)
-                .await
-                .expect("Installation process failed to start");
+            let mut installer =
+                LocalProjectInstaller::create_and_check_and_start_install(installer_args)
+                    .await
+                    .expect("Installation process failed to start");
 
             let output_result = installer.wait_process_with_output().await;
 
