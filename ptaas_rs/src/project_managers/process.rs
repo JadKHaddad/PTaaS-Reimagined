@@ -8,7 +8,7 @@ use std::{
 
 use thiserror::Error as ThisError;
 use tokio::{
-    fs,
+    fs::{self, File},
     io::{self, AsyncBufReadExt, AsyncRead, AsyncWriteExt},
     process::{Child, ChildStderr, ChildStdin, ChildStdout, Command},
 };
@@ -76,18 +76,6 @@ pub enum ProcessKillAndWaitError {
     CouldNotKillProcess(#[source] IoError),
     #[error("Could not wait for process: {0}")]
     CouldNotWaitForProcess(#[source] IoError),
-}
-
-#[derive(ThisError, Debug)]
-pub enum PipeToFileError {
-    #[error("Could not create file: {0}")]
-    CouldNotCreateFile(
-        #[source]
-        #[from]
-        IoError,
-    ),
-    #[error("Could not convert path buf to string: {0}")]
-    FailedToConvertPathBufToString(PathBuf),
 }
 
 /// Ensure killing the process before dropping it.
@@ -290,16 +278,10 @@ impl Process {
 
     async fn do_pipe_io_to_file<T: AsyncRead + Unpin + Send + 'static>(
         given_id: Option<String>,
-        file_path: &Path,
+        mut file: File,
+        file_path_string: String,
         io: Option<T>,
-    ) -> Result<(), PipeToFileError> {
-        let file_path_string = file_path
-            .to_str()
-            .ok_or_else(|| PipeToFileError::FailedToConvertPathBufToString(file_path.to_owned()))?
-            .to_owned();
-
-        let mut file = fs::File::create(file_path).await?;
-
+    ) {
         tokio::spawn(async move {
             tracing::debug!(given_id, file = file_path_string, "Stream opened.");
 
@@ -326,22 +308,16 @@ impl Process {
                 tracing::debug!(given_id, file = file_path_string, "Stream closed.");
             }
         });
-
-        Ok(())
     }
 
-    pub async fn do_pipe_stdout_to_file(
-        &mut self,
-        file_path: &Path,
-    ) -> Result<(), PipeToFileError> {
-        Process::do_pipe_io_to_file(self.given_id.clone(), file_path, self.stdout()).await
+    pub async fn do_pipe_stdout_to_file(&mut self, file: File, file_path_string: String) {
+        Process::do_pipe_io_to_file(self.given_id.clone(), file, file_path_string, self.stdout())
+            .await
     }
 
-    pub async fn do_pipe_stderr_to_file(
-        &mut self,
-        file_path: &Path,
-    ) -> Result<(), PipeToFileError> {
-        Process::do_pipe_io_to_file(self.given_id.clone(), file_path, self.stderr()).await
+    pub async fn do_pipe_stderr_to_file(&mut self, file: File, file_path_string: String) {
+        Process::do_pipe_io_to_file(self.given_id.clone(), file, file_path_string, self.stderr())
+            .await
     }
 }
 

@@ -5,14 +5,11 @@ use std::{
 };
 
 use crate::project_managers::{
-    process::{
-        NewProcessArgs, Output, PipeToFileError, ProcessCreateError, ProcessKillAndWaitError,
-        Status,
-    },
+    process::{NewProcessArgs, Output, ProcessCreateError, ProcessKillAndWaitError, Status},
     Process,
 };
 use thiserror::Error as ThisError;
-use tokio::fs::{self, ReadDir};
+use tokio::fs::{self, File, ReadDir};
 
 #[derive(Debug)]
 pub struct NewLocalProjectInstallerArgs {
@@ -30,10 +27,21 @@ pub struct LocalProjectInstaller {
     process: Process,
 }
 
+struct FileAndStringPath {
+    file: File,
+    path: String,
+}
+
+struct OsSpecificArgs {
+    program: &'static str,
+    pip_path: PathBuf,
+    first_arg: &'static str,
+}
+
 impl LocalProjectInstaller {
     pub async fn create_and_check_and_start_install(
         new_local_project_installer_args: NewLocalProjectInstallerArgs,
-    ) -> Result<Self, StartInstallError> {
+    ) -> Result<Self, CreateAndStartInstallError> {
         let process = Self::check_and_start_install(&new_local_project_installer_args).await?;
 
         let mut installer = Self {
@@ -44,12 +52,21 @@ impl LocalProjectInstaller {
             process,
         };
 
-        installer
-            .do_pipe_oi_to_files()
+        if let Err(create_file_error) = installer
+            .create_file_and_do_pipe_oi()
             .await
-            .map_err(StartInstallError::PipeToFileError)?;
+            .map_err(StartInstallError::CreateFileError)
+        {
+            installer
+                .clean_up_on_error()
+                .await
+                .map_err(|clean_up_error| {
+                    CreateAndStartInstallError::CleanUpError(create_file_error, clean_up_error)
+                })?;
 
-        // TODO: if failed to pipe to file, do cleanup: stop process, delete environment dir
+            // TODO
+            // return Err(create_file_error.into());
+        }
 
         Ok(installer)
     }
@@ -280,28 +297,54 @@ impl LocalProjectInstaller {
         Ok(())
     }
 
-    async fn do_pipe_oi_to_files(&mut self) -> Result<(), PipeToFileError> {
-        self.do_pipe_stdout_to_file().await?;
-        self.do_pipe_stderr_to_file().await
+    async fn create_file_and_do_pipe_oi(&mut self) -> Result<(), CreateFileError> {
+        self.create_file_and_do_pipe_stdout().await?;
+        self.create_file_and_do_pipe_stderr().await
     }
 
-    async fn do_pipe_stdout_to_file(&mut self) -> Result<(), PipeToFileError> {
-        self.process
-            .do_pipe_stdout_to_file(&self.get_process_out_file_path())
+    async fn create_file_string_path(
+        file_path: &Path,
+    ) -> Result<FileAndStringPath, CreateFileError> {
+        let file_path_string = file_path
+            .to_str()
+            .ok_or_else(|| CreateFileError::FailedToConvertPathBufToString(file_path.to_owned()))?
+            .to_owned();
+        let file = File::create(file_path).await?;
+        Ok(FileAndStringPath {
+            file,
+            path: file_path_string,
+        })
+    }
+
+    async fn create_out_file_and_string_path(&self) -> Result<FileAndStringPath, CreateFileError> {
+        let file_path = self.get_process_out_file_path();
+        Self::create_file_string_path(&file_path).await
+    }
+
+    async fn create_err_file_and_string_path(&self) -> Result<FileAndStringPath, CreateFileError> {
+        let file_path = self.get_process_err_file_path();
+        Self::create_file_string_path(&file_path).await
+    }
+
+    async fn create_file_and_do_pipe_stdout(&mut self) -> Result<(), CreateFileError> {
+        let FileAndStringPath { file, path } = self.create_out_file_and_string_path().await?;
+        self.process.do_pipe_stdout_to_file(file, path).await;
+        Ok(())
+    }
+
+    async fn create_file_and_do_pipe_stderr(&mut self) -> Result<(), CreateFileError> {
+        let FileAndStringPath { file, path } = self.create_err_file_and_string_path().await?;
+        self.process.do_pipe_stderr_to_file(file, path).await;
+        Ok(())
+    }
+
+    async fn clean_up_on_error(&mut self) -> Result<(), CleanUpError> {
+        self.stop().await?;
+        self.delete_environment_dir_if_exists()
             .await
+            .map_err(CleanUpError::CouldNotDeleteEnvironment)?;
+        Ok(())
     }
-
-    async fn do_pipe_stderr_to_file(&mut self) -> Result<(), PipeToFileError> {
-        self.process
-            .do_pipe_stderr_to_file(&self.get_process_err_file_path())
-            .await
-    }
-}
-
-struct OsSpecificArgs {
-    program: &'static str,
-    pip_path: PathBuf,
-    first_arg: &'static str,
 }
 
 #[derive(ThisError, Debug)]
@@ -367,12 +410,24 @@ pub enum LocustDirError {
 }
 
 #[derive(ThisError, Debug)]
-pub enum StartInstallError {
-    #[error("Error pipine to file: {0}")]
-    PipeToFileError(
+pub enum CreateAndStartInstallError {
+    #[error("Could not start install: {0}")]
+    StartInstallError(
         #[from]
         #[source]
-        PipeToFileError,
+        StartInstallError,
+    ),
+    #[error("An error occurred: {0}, and could not clean up: {1}")]
+    CleanUpError(StartInstallError, #[source] CleanUpError),
+}
+
+#[derive(ThisError, Debug)]
+pub enum StartInstallError {
+    #[error("Error pipine to file: {0}")]
+    CreateFileError(
+        #[from]
+        #[source]
+        CreateFileError,
     ),
     #[error("Could not create stderr file: {0}")]
     CouldNotCreateStderrFile(#[source] IoError),
@@ -390,6 +445,18 @@ pub enum StartInstallError {
         #[source]
         ProcessCreateError,
     ),
+}
+
+#[derive(ThisError, Debug)]
+pub enum CleanUpError {
+    #[error("Could not kill process: {0}")]
+    CouldNotKillProcess(
+        #[source]
+        #[from]
+        ProcessKillAndWaitError,
+    ),
+    #[error("Could not delete environment dir: {0}")]
+    CouldNotDeleteEnvironment(#[source] IoError),
 }
 
 #[derive(ThisError, Debug)]
@@ -432,6 +499,18 @@ impl From<DirExistsAndNotEmptyError> for LocustDirError {
             DirExistsAndNotEmptyError::DirIsEmpty => Self::LocustDirIsEmpty,
         }
     }
+}
+
+#[derive(ThisError, Debug)]
+pub enum CreateFileError {
+    #[error("Could not create file: {0}")]
+    CouldNotCreateFile(
+        #[source]
+        #[from]
+        IoError,
+    ),
+    #[error("Could not convert path buf to string: {0}")]
+    FailedToConvertPathBufToString(PathBuf),
 }
 
 #[cfg(test)]
