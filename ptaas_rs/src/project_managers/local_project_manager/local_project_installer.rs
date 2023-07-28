@@ -872,9 +872,15 @@ mod tests {
                 .await
                 .expect("Could not read error file");
 
+            let output_file_path = installer.get_process_out_file_path();
+            let output_output = fs::read_to_string(output_file_path)
+                .await
+                .expect("Could not read output file");
+
             match output.status {
                 Status::TerminatedSuccessfully => {}
                 _ => {
+                    println!("Output: {}", output_output);
                     println!("Error output: {}", error_output);
                     panic!("Unexpected status: {:?}", output.status)
                 }
