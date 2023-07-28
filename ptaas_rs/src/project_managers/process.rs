@@ -440,7 +440,7 @@ mod tests {
 
     #[tokio::test]
     #[traced_test]
-    async fn run_non_existing_process() {
+    async fn run_non_existing_process_and_expect_not_found() {
         match create_non_existing_process() {
             Ok(_) => panic!("Process should not be created."),
             Err(error) => match error {
@@ -454,7 +454,7 @@ mod tests {
 
     #[tokio::test]
     #[traced_test]
-    async fn run_numbers_script_and_kill_before_termination() {
+    async fn run_numbers_script_and_kill_before_termination_and_expect_killed() {
         let mut numbers_process = create_numbers_process_with_panic();
 
         tokio::time::sleep(Duration::from_secs(2)).await;
@@ -475,7 +475,7 @@ mod tests {
 
     #[tokio::test]
     #[traced_test]
-    async fn run_numbers_script_and_kill_after_termination() {
+    async fn run_numbers_script_and_kill_after_termination_and_expect_terminated_successfully() {
         let mut numbers_process = create_numbers_process_with_panic();
 
         tokio::time::sleep(Duration::from_secs(5)).await;
@@ -496,7 +496,7 @@ mod tests {
 
     #[tokio::test]
     #[traced_test]
-    async fn run_numbers_script_with_less_timeout() {
+    async fn run_numbers_script_with_less_timeout_and_expect_killed() {
         let mut numbers_process = create_numbers_process_with_panic();
 
         match numbers_process
@@ -513,7 +513,7 @@ mod tests {
 
     #[tokio::test]
     #[traced_test]
-    async fn run_numbers_script_with_more_timeout() {
+    async fn run_numbers_script_with_more_timeout_and_expect_terminated_successfully() {
         let mut numbers_process = create_numbers_process_with_panic();
 
         match numbers_process
@@ -530,7 +530,7 @@ mod tests {
 
     #[tokio::test]
     #[traced_test]
-    async fn run_numbers_script_with_error_code() {
+    async fn run_numbers_script_with_error_code_and_expect_error_code_1() {
         let mut numbers_process = create_numbers_with_error_code_process_with_panic();
 
         match numbers_process.wait_with_output_and_set_status().await {

@@ -581,7 +581,7 @@ mod tests {
 
         #[tokio::test]
         #[traced_test]
-        pub async fn project_dir_does_not_exist() {
+        pub async fn fail_on_project_dir_does_not_exist() {
             let project_id_and_dir = String::from("project_dir_does_not_exist");
             let installer_args = create_project_installer_default_args(
                 get_uploaded_projects_dir().join(&project_id_and_dir),
@@ -601,7 +601,7 @@ mod tests {
 
         #[tokio::test]
         #[traced_test]
-        pub async fn project_dir_is_empty() {
+        pub async fn fail_on_project_dir_is_empty() {
             let project_id_and_dir = String::from("empty");
 
             delete_gitkeep(&get_uploaded_projects_dir().join(&project_id_and_dir)).await;
@@ -626,7 +626,7 @@ mod tests {
 
         #[tokio::test]
         #[traced_test]
-        pub async fn requirements_does_not_exist() {
+        pub async fn fail_on_requirements_does_not_exist() {
             let project_id_and_dir = String::from("requirements_does_not_exist");
             let installer_args = create_project_installer_default_args(
                 get_uploaded_projects_dir().join(&project_id_and_dir),
@@ -646,7 +646,7 @@ mod tests {
 
         #[tokio::test]
         #[traced_test]
-        pub async fn requirements_does_not_contain_locust() {
+        pub async fn fail_on_requirements_does_not_contain_locust() {
             let project_id_and_dir = String::from("requirements_does_not_contain_locust");
             let installer_args = create_project_installer_default_args(
                 get_uploaded_projects_dir().join(&project_id_and_dir),
@@ -666,7 +666,7 @@ mod tests {
 
         #[tokio::test]
         #[traced_test]
-        pub async fn locust_dir_does_not_exist() {
+        pub async fn fail_on_locust_dir_does_not_exist() {
             let project_id_and_dir = String::from("locust_dir_does_not_exist");
             let installer_args = create_project_installer_default_args(
                 get_uploaded_projects_dir().join(&project_id_and_dir),
@@ -684,7 +684,7 @@ mod tests {
 
         #[tokio::test]
         #[traced_test]
-        pub async fn locust_dir_is_empty() {
+        pub async fn fail_on_locust_dir_is_empty() {
             let project_id_and_dir = String::from("locust_dir_is_empty");
             let locust_dir = get_uploaded_projects_dir()
                 .join(&project_id_and_dir)
@@ -712,7 +712,7 @@ mod tests {
 
         #[tokio::test]
         #[traced_test]
-        pub async fn locust_dir_contains_no_python_files() {
+        pub async fn fail_on_locust_dir_contains_no_python_files() {
             let project_id_and_dir = String::from("locust_dir_is_contains_no_python_files");
             let installer_args = create_project_installer_default_args(
                 get_uploaded_projects_dir().join(&project_id_and_dir),
@@ -732,7 +732,7 @@ mod tests {
 
         #[tokio::test]
         #[traced_test]
-        pub async fn valid() {
+        pub async fn check_a_valid_project_and_expect_no_errors() {
             let project_id_and_dir = String::from("valid");
             let installer_args = create_project_installer_default_args(
                 get_uploaded_projects_dir().join(&project_id_and_dir),
@@ -752,7 +752,7 @@ mod tests {
 
         #[tokio::test]
         #[traced_test]
-        pub async fn invalid_requirements() {
+        pub async fn fail_on_invalid_requirements_with_exit_code_1() {
             let project_id_and_dir = String::from("invalid_requirements");
             let uploaded_project_dir = get_uploaded_projects_dir().join(&project_id_and_dir);
             let installed_project_dir = get_installed_projects_dir().join(&project_id_and_dir);
@@ -794,7 +794,7 @@ mod tests {
 
         #[tokio::test]
         #[traced_test]
-        pub async fn killed() {
+        pub async fn kill_installation_and_expect_killed() {
             let project_id = String::from("killed");
             let project_dir = String::from("valid");
             let uploaded_project_dir = get_uploaded_projects_dir().join(&project_dir);
@@ -838,7 +838,7 @@ mod tests {
 
         #[tokio::test]
         #[traced_test]
-        pub async fn valid() {
+        pub async fn install_a_valid_project_and_expect_no_errors() {
             let project_id_and_dir = String::from("valid");
             let uploaded_project_dir = get_uploaded_projects_dir().join(&project_id_and_dir);
             let installed_project_dir = get_installed_projects_dir().join(&project_id_and_dir);
