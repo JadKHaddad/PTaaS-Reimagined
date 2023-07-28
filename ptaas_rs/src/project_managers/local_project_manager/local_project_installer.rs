@@ -867,9 +867,17 @@ mod tests {
                 panic!("Could not wait for process");
             };
 
+            let error_file_path = installer.get_process_err_file_path();
+            let error_output = fs::read_to_string(error_file_path)
+                .await
+                .expect("Could not read error file");
+
             match output.status {
                 Status::TerminatedSuccessfully => {}
-                _ => panic!("Unexpected status: {:?}", output.status),
+                _ => {
+                    println!("Error output: {}", error_output);
+                    panic!("Unexpected status: {:?}", output.status)
+                }
             }
         }
     }
