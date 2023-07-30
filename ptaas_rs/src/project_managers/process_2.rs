@@ -102,6 +102,7 @@ impl ProcessHandler {
     }
 }
 
+// TODO: remove NewProcessArgs from Struct and use only the constructor
 impl<I, S, P, T> Process<I, S, P, T>
 where
     I: IntoIterator<Item = S>,
@@ -278,4 +279,45 @@ pub enum CancellationError {
     AlreadyCancelled,
     #[error("Could not receive cancellation result from channel")]
     CouldNotReceiveFromChannel,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+    use tracing_test::traced_test;
+
+    const CRATE_DIR: &str = env!("CARGO_MANIFEST_DIR");
+
+    fn get_tests_dir() -> PathBuf {
+        Path::new(CRATE_DIR).join("tests_dir")
+    }
+
+    fn get_numbers_script_path() -> PathBuf {
+        if cfg!(target_os = "linux") {
+            return get_tests_dir().join("numbers.sh");
+        } else if cfg!(target_os = "windows") {
+            return get_tests_dir().join("numbers.ps1");
+        }
+        panic!("Uncovered target_os.");
+    }
+
+    fn get_numbers_script_with_error_code_path() -> PathBuf {
+        if cfg!(target_os = "linux") {
+            return get_tests_dir().join("numbers_with_error_code.sh");
+        } else if cfg!(target_os = "windows") {
+            return get_tests_dir().join("numbers_with_error_code.ps1");
+        }
+        panic!("Uncovered target_os.");
+    }
+
+    fn program() -> &'static str {
+        if cfg!(target_os = "linux") {
+            return "bash";
+        } else if cfg!(target_os = "windows") {
+            return "powershell.exe";
+        }
+        panic!("Uncovered target_os.");
+    }
 }
