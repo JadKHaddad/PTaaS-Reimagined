@@ -159,9 +159,10 @@ where
 
         tokio::select! {
             _ = self.token.cancelled() => {
-                match self.check_status_and_kill_and_wait(child).await {
+                match self.check_if_still_running_and_kill_and_wait(child).await {
                     Ok(exit_status) => {
                         self.write_status_on_exit_status(exit_status).await;
+
                         if cancel_channel_sender.send(Ok(())).is_err() {
                             return Err(RunError::CouldNotSendThroughChannel);
                         }
@@ -175,78 +176,64 @@ where
             }
 
             result_exit_status = child.wait() => {
-                match result_exit_status {
-                    Ok(exit_status) => {
-                        self.write_status_on_exit_status(exit_status).await;
-                    }
-                    Err(e) => {
-                        return Err(RunError::CouldNotWaitForProcess(e));
-                    }
-                }
+                let exit_status = result_exit_status.map_err(RunError::CouldNotWaitForProcess)?;
+                self.write_status_on_exit_status(exit_status).await;
             }
         }
 
         Ok(())
     }
 
-    async fn check_status_and_kill_and_wait(
+    async fn check_if_still_running_and_kill_and_wait(
         &mut self,
         mut child: Child,
     ) -> Result<ExitStatus, ProcessKillAndWaitError> {
-        match child.try_wait() {
-            Ok(option_ex_status) => {
-                match option_ex_status {
-                    // child has already exited
-                    Some(exit_status) => Ok(exit_status),
-                    None => {
-                        // child is still running
-                        // kill child
-                        match child.kill().await {
-                            Ok(_) => {
-                                self.child_killed_successfuly = true;
-                                match child.wait().await {
-                                    Ok(exit_status) => Ok(exit_status),
-                                    Err(e) => {
-                                        Err(ProcessKillAndWaitError::CouldNotWaitForProcess(e))
-                                    }
-                                }
-                            }
-                            Err(e) => Err(ProcessKillAndWaitError::CouldNotKillProcess(e)),
-                        }
-                    }
-                }
+        let option_exit_status = child
+            .try_wait()
+            .map_err(ProcessKillAndWaitError::CouldNotCheckStatus)?;
+
+        let exit_status = match option_exit_status {
+            Some(exit_status) => exit_status,
+            None => {
+                child
+                    .kill()
+                    .await
+                    .map_err(ProcessKillAndWaitError::CouldNotKillProcess)?;
+
+                self.child_killed_successfuly = true;
+
+                child
+                    .wait()
+                    .await
+                    .map_err(ProcessKillAndWaitError::CouldNotWaitForProcess)?
             }
-            Err(e) => Err(ProcessKillAndWaitError::CouldNotCheckStatus(e)),
+        };
+
+        Ok(exit_status)
+    }
+
+    async fn get_status_on_exit_status(&self, exit_status: ExitStatus) -> Status {
+        if exit_status.success() {
+            return Status::TerminatedSuccessfully;
+        };
+
+        match exit_status.code() {
+            Some(code) => match code {
+                1 if cfg!(target_os = "windows") && self.child_killed_successfuly => Status::Killed,
+                _ => Status::TerminatedWithError(
+                    TerminationWithErrorStatus::TerminatedWithErrorCode(code),
+                ),
+            },
+            None if cfg!(target_os = "linux") && self.child_killed_successfuly => Status::Killed,
+            _ => Status::TerminatedWithError(
+                TerminationWithErrorStatus::TerminatedWithUnknownErrorCode,
+            ),
         }
     }
 
     async fn write_status_on_exit_status(&self, exit_status: ExitStatus) {
-        if exit_status.success() {
-            self.write_status(Status::TerminatedSuccessfully).await;
-        } else {
-            match exit_status.code() {
-                Some(code) => match code {
-                    1 if cfg!(target_os = "windows") && self.child_killed_successfuly => {
-                        self.write_status(Status::Killed).await;
-                    }
-                    _ => {
-                        self.write_status(Status::TerminatedWithError(
-                            TerminationWithErrorStatus::TerminatedWithErrorCode(code),
-                        ))
-                        .await;
-                    }
-                },
-                None if cfg!(target_os = "linux") && self.child_killed_successfuly => {
-                    self.write_status(Status::Killed).await;
-                }
-                _ => {
-                    self.write_status(Status::TerminatedWithError(
-                        TerminationWithErrorStatus::TerminatedWithUnknownErrorCode,
-                    ))
-                    .await
-                }
-            }
-        }
+        let status = self.get_status_on_exit_status(exit_status).await;
+        self.write_status(status).await;
     }
 
     pub async fn status(&self) -> Status {
