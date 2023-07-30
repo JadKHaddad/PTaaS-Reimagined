@@ -77,6 +77,7 @@ pub struct ProcessHandler {
 }
 
 impl ProcessHandler {
+    /// Will deadlock if corresponding `Process` has not been started.
     pub async fn cancel(&mut self) -> Result<Option<ProcessKillAndWaitError>, CancellationError> {
         if self.token.is_cancelled() {
             return Err(CancellationError::AlreadyCancelled);
@@ -158,6 +159,7 @@ impl Process {
 
         tokio::select! {
             _ = self.token.cancelled() => {
+                println!("##1");
                 match self.check_if_still_running_and_kill_and_wait(child).await {
                     Ok(exit_status) => {
                         self.write_status_on_exit_status(exit_status).await;
@@ -331,8 +333,8 @@ mod tests {
             args: vec![path_str],
             current_dir: ".".to_owned(),
             stdin: Stdio::piped(),
-            stdout: Stdio::piped(),
-            stderr: Stdio::piped(),
+            stdout: Stdio::inherit(),
+            stderr: Stdio::inherit(),
             kill_on_drop: true,
         }
     }
@@ -406,22 +408,25 @@ mod tests {
         }
     }
 
-    // #[tokio::test]
-    // #[traced_test]
-    // async fn run_numbers_script_and_kill_before_start_and_expect_killed() {
-    //     let (mut process, mut handler) = create_numbers_process();
-    //     let args = create_number_process_run_args();
+    #[tokio::test]
+    #[traced_test]
+    async fn run_numbers_script_and_kill_before_start_and_expect_killed() {
+        let (mut process, mut handler) = create_numbers_process();
+        let args = create_number_process_run_args();
 
-    //     handler.cancel().await.expect("Error cancelling process.");
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            let result = process.run(args).await;
 
-    //     let result = process.run(args).await;
+            match result {
+                Ok(Status::Terminated(TerminationStatus::Killed)) => {}
+                Err(e) => panic!("Unexpected error: {:?}", e),
+                _ => panic!("Unexpected result: {:?}", result),
+            }
+        });
 
-    //     match result {
-    //         Ok(Status::Terminated(TerminationStatus::Killed)) => {}
-    //         Err(e) => panic!("Unexpected error: {:?}", e),
-    //         _ => panic!("Unexpected result: {:?}", result),
-    //     }
-    // }
+        handler.cancel().await.expect("Error cancelling process.");
+    }
 
     #[tokio::test]
     #[traced_test]
