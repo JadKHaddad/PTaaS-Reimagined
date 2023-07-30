@@ -51,7 +51,6 @@ pub struct Output {
 /// Used in the constructor of `Process` to pass arguments, to improve readability.
 #[derive(Debug)]
 pub struct NewProcessArgs<I, S, P, T> {
-    pub given_id: Option<String>,
     pub program: S,
     pub args: I,
     pub current_dir: P,
@@ -61,12 +60,10 @@ pub struct NewProcessArgs<I, S, P, T> {
     pub kill_on_drop: bool,
 }
 
-pub struct Process<I, S, P, T> {
+pub struct Process {
     token: CancellationToken,
     status: Arc<RwLock<Status>>,
-    given_id: Option<String>,
-    /// Option so we can take it
-    new_process_args: Option<NewProcessArgs<I, S, P, T>>,
+    given_id: String,
     child_killed_successfuly: bool,
     /// Option so we can take it
     cancel_channel_sender: Option<Sender<Option<ProcessKillAndWaitError>>>,
@@ -102,16 +99,9 @@ impl ProcessHandler {
     }
 }
 
-// TODO: remove NewProcessArgs from Struct and use only the constructor
-impl<I, S, P, T> Process<I, S, P, T>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<OsStr>,
-    P: AsRef<Path>,
-    T: Into<Stdio>,
-{
+impl Process {
     #[must_use]
-    pub fn new(mut new_process_args: NewProcessArgs<I, S, P, T>) -> (Self, ProcessHandler) {
+    pub fn new(given_id: String) -> (Self, ProcessHandler) {
         let token = CancellationToken::new();
         let status = Arc::new(RwLock::new(Status::Created));
         let (cancel_channel_sender, cancel_channel_receiver) = tokio::sync::oneshot::channel();
@@ -119,16 +109,17 @@ where
         let process = Self {
             token: token.clone(),
             status: status.clone(),
-            given_id: new_process_args.given_id.take(),
-            new_process_args: Some(new_process_args),
+            given_id,
             child_killed_successfuly: false,
             cancel_channel_sender: Some(cancel_channel_sender),
         };
+
         let process_handler = ProcessHandler {
             token,
             status,
             cancel_channel_receiver: Some(cancel_channel_receiver),
         };
+
         (process, process_handler)
     }
 
@@ -136,16 +127,20 @@ where
         *self.status.write().await = status;
     }
 
-    pub async fn run(&mut self) -> Result<Status, RunError> {
-        let new_process_args = self
-            .new_process_args
-            .take()
-            .ok_or(RunError::AlreadyRunning)?;
-
+    pub async fn run<I, S, P, T>(
+        &mut self,
+        new_process_args: NewProcessArgs<I, S, P, T>,
+    ) -> Result<Status, ProcessRunError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+        P: AsRef<Path>,
+        T: Into<Stdio>,
+    {
         let cancel_channel_sender = self
             .cancel_channel_sender
             .take()
-            .ok_or(RunError::AlreadyRunning)?;
+            .ok_or(ProcessRunError::AlreadyRunning)?;
 
         let mut child = Command::new(new_process_args.program)
             .args(new_process_args.args)
@@ -155,7 +150,7 @@ where
             .stderr(new_process_args.stderr)
             .kill_on_drop(new_process_args.kill_on_drop)
             .spawn()
-            .map_err(RunError::CouldNotCreateProcess)?;
+            .map_err(ProcessRunError::CouldNotCreateProcess)?;
 
         self.write_status(Status::Running).await;
 
@@ -168,19 +163,19 @@ where
                         self.write_status_on_exit_status(exit_status).await;
 
                         if cancel_channel_sender.send(None).is_err() {
-                            return Err(RunError::CouldNotSendThroughChannel);
+                            return Err(ProcessRunError::CouldNotSendThroughChannel);
                         }
                     }
                     Err(e) => {
                         if cancel_channel_sender.send(Some(e)).is_err() {
-                            return Err(RunError::CouldNotSendThroughChannel);
+                            return Err(ProcessRunError::CouldNotSendThroughChannel);
                         }
                     }
                 }
             }
 
             result_exit_status = child.wait() => {
-                let exit_status = result_exit_status.map_err(RunError::CouldNotWaitForProcess)?;
+                let exit_status = result_exit_status.map_err(ProcessRunError::CouldNotWaitForProcess)?;
                 self.write_status_on_exit_status(exit_status).await;
             }
         }
@@ -252,7 +247,7 @@ where
 }
 
 #[derive(ThisError, Debug)]
-pub enum RunError {
+pub enum ProcessRunError {
     #[error("Process is already running")]
     AlreadyRunning,
     #[error("Could not create process: {0}")]
@@ -283,7 +278,7 @@ pub enum CancellationError {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::{path::PathBuf, time::Duration};
 
     use super::*;
     use tracing_test::traced_test;
@@ -319,5 +314,132 @@ mod tests {
             return "powershell.exe";
         }
         panic!("Uncovered target_os.");
+    }
+
+    fn create_process_args(
+        program: String,
+        path: PathBuf,
+    ) -> NewProcessArgs<Vec<String>, String, String, Stdio> {
+        let path_str = path
+            .to_str()
+            .expect("Error converting path to string.")
+            .to_owned();
+        NewProcessArgs {
+            program,
+            args: vec![path_str],
+            current_dir: ".".to_owned(),
+            stdin: Stdio::piped(),
+            stdout: Stdio::piped(),
+            stderr: Stdio::piped(),
+            kill_on_drop: true,
+        }
+    }
+
+    fn create_numbers_process() -> (Process, ProcessHandler) {
+        Process::new("numbers_process".into())
+    }
+
+    fn create_number_process_run_args() -> NewProcessArgs<Vec<String>, String, String, Stdio> {
+        let path = get_numbers_script_path();
+        create_process_args(program().to_owned(), path)
+    }
+
+    fn create_numbers_process_with_error_code() -> (Process, ProcessHandler) {
+        Process::new("numbers_process_with_error_code".into())
+    }
+
+    fn create_number_process_with_error_code_run_args(
+    ) -> NewProcessArgs<Vec<String>, String, String, Stdio> {
+        let path = get_numbers_script_with_error_code_path();
+        create_process_args(program().to_owned(), path)
+    }
+
+    fn create_non_existing_process() -> (Process, ProcessHandler) {
+        Process::new("non_existing_process".into())
+    }
+
+    fn create_non_existing_process_run_args() -> NewProcessArgs<Vec<String>, String, String, Stdio>
+    {
+        let path = PathBuf::from("non_existing_process");
+        create_process_args("non_existing_process".to_owned(), path)
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn run_non_existing_process_and_expect_not_found() {
+        let (mut process, _) = create_non_existing_process();
+        let args = create_non_existing_process_run_args();
+
+        let result = process.run(args).await;
+
+        match result {
+            Ok(_) => panic!("Process should not be created."),
+            Err(error) => match error {
+                ProcessRunError::CouldNotCreateProcess(io_error) => match io_error.kind() {
+                    std::io::ErrorKind::NotFound => {}
+                    _ => panic!("Unexpected error kind: {:?}", io_error.kind()),
+                },
+                _ => panic!("Unexpected error: {:?}", error),
+            },
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn run_numbers_script_and_kill_before_termination_and_expect_killed() {
+        let (mut process, mut handler) = create_numbers_process();
+        let args = create_number_process_run_args();
+
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            handler.cancel().await.expect("Error cancelling process.");
+        });
+
+        let result = process.run(args).await;
+
+        match result {
+            Ok(Status::Terminated(TerminationStatus::Killed)) => {}
+            Err(e) => panic!("Unexpected error: {:?}", e),
+            _ => panic!("Unexpected result: {:?}", result),
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn run_numbers_script_and_kill_after_termination_and_expect_terminated_successfully() {
+        let (mut process, mut handler) = create_numbers_process();
+        let args = create_number_process_run_args();
+
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            handler.cancel().await.expect("Error cancelling process.");
+        });
+
+        let result = process.run(args).await;
+
+        match result {
+            Ok(Status::Terminated(TerminationStatus::TerminatedSuccessfully)) => {}
+            Err(e) => panic!("Unexpected error: {:?}", e),
+            _ => panic!("Unexpected result: {:?}", result),
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn run_numbers_script_with_error_code_and_expect_error_code_1() {
+        let (mut process, _) = create_numbers_process_with_error_code();
+        let args = create_number_process_with_error_code_run_args();
+
+        let result = process.run(args).await;
+
+        match result {
+            Ok(Status::Terminated(TerminationStatus::TerminatedWithError(
+                TerminationWithErrorStatus::TerminatedWithErrorCode(code),
+            ))) => {
+                assert_eq!(code, 1);
+            }
+            Err(e) => panic!("Unexpected error: {:?}", e),
+            _ => panic!("Unexpected result: {:?}", result),
+        }
     }
 }
