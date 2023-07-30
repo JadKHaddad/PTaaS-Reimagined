@@ -85,7 +85,7 @@ impl ProcessHandler {
         let cancel_channel_receiver = self
             .cancel_channel_receiver
             .take()
-            .ok_or(CancellationError::AlreadyCancelled)?;
+            .ok_or(CancellationError::AlreayTriedToCancel)?;
 
         self.token.cancel();
 
@@ -140,7 +140,7 @@ impl Process {
         let cancel_channel_sender = self
             .cancel_channel_sender
             .take()
-            .ok_or(ProcessRunError::AlreadyRunning)?;
+            .ok_or(ProcessRunError::AlreadyStarted)?;
 
         let mut child = Command::new(new_process_args.program)
             .args(new_process_args.args)
@@ -248,8 +248,8 @@ impl Process {
 
 #[derive(ThisError, Debug)]
 pub enum ProcessRunError {
-    #[error("Process is already running")]
-    AlreadyRunning,
+    #[error("Process has already been started, can not start again")]
+    AlreadyStarted,
     #[error("Could not create process: {0}")]
     CouldNotCreateProcess(#[source] IoError),
     #[error("Could not wait for process: {0}")]
@@ -272,6 +272,8 @@ pub enum ProcessKillAndWaitError {
 pub enum CancellationError {
     #[error("Cancellation is already requested")]
     AlreadyCancelled,
+    #[error("Cancellation can only be requested once")]
+    AlreayTriedToCancel,
     #[error("Corresponding Process was dropped")]
     ProcessDropped,
 }
@@ -404,6 +406,23 @@ mod tests {
         }
     }
 
+    // #[tokio::test]
+    // #[traced_test]
+    // async fn run_numbers_script_and_kill_before_start_and_expect_killed() {
+    //     let (mut process, mut handler) = create_numbers_process();
+    //     let args = create_number_process_run_args();
+
+    //     handler.cancel().await.expect("Error cancelling process.");
+
+    //     let result = process.run(args).await;
+
+    //     match result {
+    //         Ok(Status::Terminated(TerminationStatus::Killed)) => {}
+    //         Err(e) => panic!("Unexpected error: {:?}", e),
+    //         _ => panic!("Unexpected result: {:?}", result),
+    //     }
+    // }
+
     #[tokio::test]
     #[traced_test]
     async fn run_numbers_script_and_kill_after_termination_and_expect_terminated_successfully() {
@@ -441,5 +460,37 @@ mod tests {
             Err(e) => panic!("Unexpected error: {:?}", e),
             _ => panic!("Unexpected result: {:?}", result),
         }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn cancel_a_dropped_process_and_expect_error() {
+        let (process, mut handler) = create_numbers_process();
+
+        drop(process);
+
+        match handler.cancel().await {
+            Err(CancellationError::ProcessDropped) => {}
+            _ => panic!("Unexpected result"),
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn cancel_a_process_twice_and_excpect_error() {
+        let (mut process, mut handler) = create_numbers_process();
+        let args = create_number_process_run_args();
+
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            handler.cancel().await.expect("Error cancelling process.");
+
+            match handler.cancel().await {
+                Err(CancellationError::AlreadyCancelled) => {}
+                _ => panic!("Unexpected result"),
+            }
+        });
+
+        process.run(args).await.expect("Error running process.");
     }
 }
