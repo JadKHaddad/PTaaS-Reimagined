@@ -7,13 +7,14 @@ rust-version = "1.70.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-convertible = {path = "../convertible/convertible", features = ["derive"]}
-tokio = {version="1.29.1", features = ["full"]}
-tracing-subscriber = {version = "0.3.16", features = ["env-filter", "time"]}
+convertible = { path = "../convertible/convertible", features = ["derive"] }
+tokio = { version = "1.29.1", features = ["full"] }
+tokio-util = "0.7.6"
+tracing-subscriber = { version = "0.3.16", features = ["env-filter", "time"] }
 tracing = "0.1.37"
 tracing-test = "0.2.4"
 async-trait = "0.1.64"
-thiserror = {version="1.0.43"}
-serde = {version= "1.0.166", features = ["derive"]}
+thiserror = { version = "1.0.43" }
+serde = { version = "1.0.166", features = ["derive"] }
 serde_json = "1.0.100"
 which = "4.4.0"
