@@ -64,20 +64,18 @@ pub struct Process<I, S, P, T> {
     new_process_args: Option<NewProcessArgs<I, S, P, T>>,
     child_killed_successfuly: bool,
     /// Option so we can take it
-    cancel_channel_sender: Option<Sender<Result<(), ProcessKillAndWaitError>>>,
+    cancel_channel_sender: Option<Sender<Option<ProcessKillAndWaitError>>>,
 }
 
 pub struct ProcessHandler {
     token: CancellationToken,
     status: Arc<RwLock<Status>>,
     /// Option so we can take it
-    cancel_channel_receiver: Option<Receiver<Result<(), ProcessKillAndWaitError>>>,
+    cancel_channel_receiver: Option<Receiver<Option<ProcessKillAndWaitError>>>,
 }
 
 impl ProcessHandler {
-    pub async fn cancel(
-        &mut self,
-    ) -> Result<Result<(), ProcessKillAndWaitError>, CancellationError> {
+    pub async fn cancel(&mut self) -> Result<Option<ProcessKillAndWaitError>, CancellationError> {
         if self.token.is_cancelled() {
             return Err(CancellationError::AlreadyCancelled);
         }
@@ -163,12 +161,12 @@ where
                     Ok(exit_status) => {
                         self.write_status_on_exit_status(exit_status).await;
 
-                        if cancel_channel_sender.send(Ok(())).is_err() {
+                        if cancel_channel_sender.send(None).is_err() {
                             return Err(RunError::CouldNotSendThroughChannel);
                         }
                     }
                     Err(e) => {
-                        if cancel_channel_sender.send(Err(e)).is_err() {
+                        if cancel_channel_sender.send(Some(e)).is_err() {
                             return Err(RunError::CouldNotSendThroughChannel);
                         }
                     }
