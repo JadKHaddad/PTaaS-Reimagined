@@ -20,6 +20,11 @@ use tokio_util::sync::CancellationToken;
 pub enum Status {
     Created,
     Running,
+    Terminated(TerminationStatus),
+}
+
+#[derive(Debug, Clone)]
+pub enum TerminationStatus {
     /// Explicitly killed by this library.
     Killed,
     TerminatedSuccessfully,
@@ -130,7 +135,7 @@ where
         *self.status.write().await = status;
     }
 
-    pub async fn run(&mut self) -> Result<(), RunError> {
+    pub async fn run(&mut self) -> Result<Status, RunError> {
         let new_process_args = self
             .new_process_args
             .take()
@@ -179,7 +184,9 @@ where
             }
         }
 
-        Ok(())
+        let status = self.status().await;
+
+        Ok(status)
     }
 
     async fn check_if_still_running_and_kill_and_wait(
@@ -212,20 +219,24 @@ where
 
     async fn get_status_on_exit_status(&self, exit_status: ExitStatus) -> Status {
         if exit_status.success() {
-            return Status::TerminatedSuccessfully;
+            return Status::Terminated(TerminationStatus::TerminatedSuccessfully);
         };
 
         match exit_status.code() {
             Some(code) => match code {
-                1 if cfg!(target_os = "windows") && self.child_killed_successfuly => Status::Killed,
-                _ => Status::TerminatedWithError(
+                1 if cfg!(target_os = "windows") && self.child_killed_successfuly => {
+                    Status::Terminated(TerminationStatus::Killed)
+                }
+                _ => Status::Terminated(TerminationStatus::TerminatedWithError(
                     TerminationWithErrorStatus::TerminatedWithErrorCode(code),
-                ),
+                )),
             },
-            None if cfg!(target_os = "linux") && self.child_killed_successfuly => Status::Killed,
-            _ => Status::TerminatedWithError(
+            None if cfg!(target_os = "linux") && self.child_killed_successfuly => {
+                Status::Terminated(TerminationStatus::Killed)
+            }
+            _ => Status::Terminated(TerminationStatus::TerminatedWithError(
                 TerminationWithErrorStatus::TerminatedWithUnknownErrorCode,
-            ),
+            )),
         }
     }
 
