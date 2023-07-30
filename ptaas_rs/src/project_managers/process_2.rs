@@ -78,12 +78,16 @@ impl ProcessHandler {
     pub async fn cancel(
         &mut self,
     ) -> Result<Result<(), ProcessKillAndWaitError>, CancellationError> {
-        self.token.cancel();
+        if self.token.is_cancelled() {
+            return Err(CancellationError::AlreadyCancelled);
+        }
 
         let cancel_channel_receiver = self
             .cancel_channel_receiver
             .take()
             .ok_or(CancellationError::AlreadyCancelled)?;
+
+        self.token.cancel();
 
         cancel_channel_receiver
             .await
@@ -102,6 +106,7 @@ where
     P: AsRef<Path>,
     T: Into<Stdio>,
 {
+    #[must_use]
     pub fn new(mut new_process_args: NewProcessArgs<I, S, P, T>) -> (Self, ProcessHandler) {
         let token = CancellationToken::new();
         let status = Arc::new(RwLock::new(Status::Created));
@@ -184,7 +189,7 @@ where
         Ok(())
     }
 
-    pub async fn check_status_and_kill_and_wait(
+    async fn check_status_and_kill_and_wait(
         &mut self,
         mut child: Child,
     ) -> Result<ExitStatus, ProcessKillAndWaitError> {
@@ -243,6 +248,10 @@ where
             }
         }
     }
+
+    pub async fn status(&self) -> Status {
+        self.status.read().await.clone()
+    }
 }
 
 #[derive(ThisError, Debug)]
@@ -253,7 +262,6 @@ pub enum RunError {
     CouldNotCreateProcess(#[source] IoError),
     #[error("Could not wait for process: {0}")]
     CouldNotWaitForProcess(#[source] IoError),
-
     #[error("Could not send cancellation result through channel")]
     CouldNotSendThroughChannel,
 }
