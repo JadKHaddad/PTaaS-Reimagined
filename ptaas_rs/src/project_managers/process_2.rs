@@ -8,8 +8,11 @@ use std::{
 
 use thiserror::Error as ThisError;
 use tokio::{
-    process::{ChildStderr, ChildStdout, Command},
-    sync::RwLock,
+    process::{Child, ChildStderr, ChildStdout, Command},
+    sync::{
+        oneshot::{Receiver, Sender},
+        RwLock,
+    },
 };
 use tokio_util::sync::CancellationToken;
 
@@ -59,18 +62,32 @@ pub struct Process<I, S, P, T> {
     given_id: Option<String>,
     /// Option so we can take it
     new_process_args: Option<NewProcessArgs<I, S, P, T>>,
-    child_terminated_and_awaited_successfuly: bool,
     child_killed_successfuly: bool,
+    /// Option so we can take it
+    cancel_channel_sender: Option<Sender<Result<(), ProcessKillAndWaitError>>>,
 }
 
 pub struct ProcessHandler {
     token: CancellationToken,
     status: Arc<RwLock<Status>>,
+    /// Option so we can take it
+    cancel_channel_receiver: Option<Receiver<Result<(), ProcessKillAndWaitError>>>,
 }
 
 impl ProcessHandler {
-    pub fn cancel(&self) {
+    pub async fn cancel(
+        &mut self,
+    ) -> Result<Result<(), ProcessKillAndWaitError>, CancellationError> {
         self.token.cancel();
+
+        let cancel_channel_receiver = self
+            .cancel_channel_receiver
+            .take()
+            .ok_or(CancellationError::AlreadyCancelled)?;
+
+        cancel_channel_receiver
+            .await
+            .map_err(|_| CancellationError::CouldNotReceiveFromChannel)
     }
 
     pub async fn status(&self) -> Status {
@@ -88,16 +105,21 @@ where
     pub fn new(mut new_process_args: NewProcessArgs<I, S, P, T>) -> (Self, ProcessHandler) {
         let token = CancellationToken::new();
         let status = Arc::new(RwLock::new(Status::Created));
+        let (cancel_channel_sender, cancel_channel_receiver) = tokio::sync::oneshot::channel();
 
         let process = Self {
             token: token.clone(),
             status: status.clone(),
             given_id: new_process_args.given_id.take(),
             new_process_args: Some(new_process_args),
-            child_terminated_and_awaited_successfuly: false,
             child_killed_successfuly: false,
+            cancel_channel_sender: Some(cancel_channel_sender),
         };
-        let process_handler = ProcessHandler { token, status };
+        let process_handler = ProcessHandler {
+            token,
+            status,
+            cancel_channel_receiver: Some(cancel_channel_receiver),
+        };
         (process, process_handler)
     }
 
@@ -108,6 +130,11 @@ where
     pub async fn run(&mut self) -> Result<(), RunError> {
         let new_process_args = self
             .new_process_args
+            .take()
+            .ok_or(RunError::AlreadyRunning)?;
+
+        let cancel_channel_sender = self
+            .cancel_channel_sender
             .take()
             .ok_or(RunError::AlreadyRunning)?;
 
@@ -127,41 +154,68 @@ where
 
         tokio::select! {
             _ = self.token.cancelled() => {
-                // check if child is running
-                let try_wait_result = child.try_wait().map(|option_ex_status| async move{
-                    match option_ex_status {
-                        Some(exit_status) => {
-                            self.write_status_on_ex_status(exit_status).await;
+                match self.check_status_and_kill_and_wait(child).await {
+                    Ok(exit_status) => {
+                        self.write_status_on_exit_status(exit_status).await;
+                        if cancel_channel_sender.send(Ok(())).is_err() {
+                            return Err(RunError::CouldNotSendThroughChannel);
                         }
-                        None => {
-                            // child is still running
-                            // kill child
-                            let kill_result = child.kill().await;
-
-                            let wait_result = child.wait().await;
-
+                    }
+                    Err(e) => {
+                        if cancel_channel_sender.send(Err(e)).is_err() {
+                            return Err(RunError::CouldNotSendThroughChannel);
                         }
-                    }});
+                    }
+                }
             }
 
             result_exit_status = child.wait() => {
-                // set status
                 match result_exit_status {
                     Ok(exit_status) => {
-                        self.write_status_on_ex_status(exit_status).await;
+                        self.write_status_on_exit_status(exit_status).await;
                     }
                     Err(e) => {
-                        // could not wait
+                        return Err(RunError::CouldNotWaitForProcess(e));
                     }
                 }
-
             }
         }
 
         Ok(())
     }
 
-    async fn write_status_on_ex_status(&mut self, exit_status: ExitStatus) {
+    pub async fn check_status_and_kill_and_wait(
+        &mut self,
+        mut child: Child,
+    ) -> Result<ExitStatus, ProcessKillAndWaitError> {
+        match child.try_wait() {
+            Ok(option_ex_status) => {
+                match option_ex_status {
+                    // child has already exited
+                    Some(exit_status) => Ok(exit_status),
+                    None => {
+                        // child is still running
+                        // kill child
+                        match child.kill().await {
+                            Ok(_) => {
+                                self.child_killed_successfuly = true;
+                                match child.wait().await {
+                                    Ok(exit_status) => Ok(exit_status),
+                                    Err(e) => {
+                                        Err(ProcessKillAndWaitError::CouldNotWaitForProcess(e))
+                                    }
+                                }
+                            }
+                            Err(e) => Err(ProcessKillAndWaitError::CouldNotKillProcess(e)),
+                        }
+                    }
+                }
+            }
+            Err(e) => Err(ProcessKillAndWaitError::CouldNotCheckStatus(e)),
+        }
+    }
+
+    async fn write_status_on_exit_status(&self, exit_status: ExitStatus) {
         if exit_status.success() {
             self.write_status(Status::TerminatedSuccessfully).await;
         } else {
@@ -188,7 +242,6 @@ where
                 }
             }
         }
-        self.child_terminated_and_awaited_successfuly = true;
     }
 }
 
@@ -198,17 +251,27 @@ pub enum RunError {
     AlreadyRunning,
     #[error("Could not create process: {0}")]
     CouldNotCreateProcess(#[source] IoError),
+    #[error("Could not wait for process: {0}")]
+    CouldNotWaitForProcess(#[source] IoError),
+
+    #[error("Could not send cancellation result through channel")]
+    CouldNotSendThroughChannel,
 }
 
 #[derive(ThisError, Debug)]
-pub enum ChildWaitError {
-    #[error("Child was not created")]
-    ChildNotCreated,
-
+pub enum ProcessKillAndWaitError {
+    #[error("Could not check status of process: {0}")]
+    CouldNotCheckStatus(#[source] IoError),
+    #[error("Could not kill process: {0}")]
+    CouldNotKillProcess(#[source] IoError),
     #[error("Could not wait for process: {0}")]
-    CouldNotWaitForProcess(
-        #[source]
-        #[from]
-        IoError,
-    ),
+    CouldNotWaitForProcess(#[source] IoError),
+}
+
+#[derive(ThisError, Debug)]
+pub enum CancellationError {
+    #[error("Cancellation is already requested")]
+    AlreadyCancelled,
+    #[error("Could not receive cancellation result from channel")]
+    CouldNotReceiveFromChannel,
 }
