@@ -14,7 +14,6 @@ use tokio::{
         RwLock,
     },
 };
-use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone)]
 pub enum Status {
@@ -27,6 +26,7 @@ pub enum Status {
 pub enum TerminationStatus {
     /// Explicitly killed by this library.
     Killed,
+    KilledByDroppingHandler,
     TerminatedSuccessfully,
     TerminatedWithError(TerminationWithErrorStatus),
 }
@@ -61,34 +61,39 @@ pub struct NewProcessArgs<I, S, P, T> {
 }
 
 pub struct Process {
-    token: CancellationToken,
     status: Arc<RwLock<Status>>,
     given_id: String,
     child_killed_successfuly: bool,
     /// Option so we can take it
-    cancel_channel_sender: Option<Sender<Option<ProcessKillAndWaitError>>>,
+    cancel_status_channel_sender: Option<Sender<Option<ProcessKillAndWaitError>>>,
+    /// Option so we can take it
+    cancel_channel_receiver: Option<Receiver<()>>,
 }
 
 pub struct ProcessHandler {
-    token: CancellationToken,
     status: Arc<RwLock<Status>>,
     /// Option so we can take it
-    cancel_channel_receiver: Option<Receiver<Option<ProcessKillAndWaitError>>>,
+    cancel_channel_sender: Option<Sender<()>>,
+    /// Option so we can take it
+    cancel_status_channel_receiver: Option<Receiver<Option<ProcessKillAndWaitError>>>,
 }
 
 impl ProcessHandler {
     /// Will deadlock if corresponding `Process` has not been started.
     pub async fn cancel(&mut self) -> Result<Option<ProcessKillAndWaitError>, CancellationError> {
-        if self.token.is_cancelled() {
-            return Err(CancellationError::AlreadyCancelled);
-        }
-
-        let cancel_channel_receiver = self
-            .cancel_channel_receiver
+        let cancel_channel_sender = self
+            .cancel_channel_sender
             .take()
             .ok_or(CancellationError::AlreayTriedToCancel)?;
 
-        self.token.cancel();
+        let cancel_channel_receiver = self
+            .cancel_status_channel_receiver
+            .take()
+            .ok_or(CancellationError::AlreayTriedToCancel)?;
+
+        cancel_channel_sender
+            .send(())
+            .map_err(|_| CancellationError::ProcessDropped)?;
 
         cancel_channel_receiver
             .await
@@ -103,22 +108,24 @@ impl ProcessHandler {
 impl Process {
     #[must_use]
     pub fn new(given_id: String) -> (Self, ProcessHandler) {
-        let token = CancellationToken::new();
         let status = Arc::new(RwLock::new(Status::Created));
+
+        let (cancel_status_channel_sender, cancel_status_channel_receiver) =
+            tokio::sync::oneshot::channel();
         let (cancel_channel_sender, cancel_channel_receiver) = tokio::sync::oneshot::channel();
 
         let process = Self {
-            token: token.clone(),
             status: status.clone(),
             given_id,
             child_killed_successfuly: false,
-            cancel_channel_sender: Some(cancel_channel_sender),
+            cancel_status_channel_sender: Some(cancel_status_channel_sender),
+            cancel_channel_receiver: Some(cancel_channel_receiver),
         };
 
         let process_handler = ProcessHandler {
-            token,
             status,
-            cancel_channel_receiver: Some(cancel_channel_receiver),
+            cancel_channel_sender: Some(cancel_channel_sender),
+            cancel_status_channel_receiver: Some(cancel_status_channel_receiver),
         };
 
         (process, process_handler)
@@ -139,7 +146,12 @@ impl Process {
         T: Into<Stdio>,
     {
         let cancel_channel_sender = self
-            .cancel_channel_sender
+            .cancel_status_channel_sender
+            .take()
+            .ok_or(ProcessRunError::AlreadyStarted)?;
+
+        let cancel_channel_receiver = self
+            .cancel_channel_receiver
             .take()
             .ok_or(ProcessRunError::AlreadyStarted)?;
 
@@ -158,27 +170,35 @@ impl Process {
         // do io piping
 
         tokio::select! {
-            _ = self.token.cancelled() => {
-                println!("##1");
-                match self.check_if_still_running_and_kill_and_wait(child).await {
-                    Ok(exit_status) => {
-                        self.write_status_on_exit_status(exit_status).await;
+            result = cancel_channel_receiver => {
+                if result.is_ok() {
+                    // The process was explicitly cancelled by the handler
+                    // Cancelation errors are sent to the handler and this function returns
+                    match self.check_if_still_running_and_kill_and_wait(child).await {
+                        Ok(exit_status) => {
+                            self.write_status_on_exit_status(exit_status, false).await;
 
-                        if cancel_channel_sender.send(None).is_err() {
-                            return Err(ProcessRunError::HandlerDropped);
+                            if cancel_channel_sender.send(None).is_err() {
+                                return Err(ProcessRunError::HandlerDropped);
+                            }
+                        }
+                        Err(e) => {
+                            if cancel_channel_sender.send(Some(e)).is_err() {
+                                return Err(ProcessRunError::HandlerDropped);
+                            }
                         }
                     }
-                    Err(e) => {
-                        if cancel_channel_sender.send(Some(e)).is_err() {
-                            return Err(ProcessRunError::HandlerDropped);
-                        }
-                    }
+                }
+                else {
+                    // The handler was dropped, wich means we can't send the cancelation error, so we return it here
+                    let exit_status = self.check_if_still_running_and_kill_and_wait(child).await?;
+                    self.write_status_on_exit_status(exit_status, true).await;
                 }
             }
 
             result_exit_status = child.wait() => {
                 let exit_status = result_exit_status.map_err(ProcessRunError::CouldNotWaitForProcess)?;
-                self.write_status_on_exit_status(exit_status).await;
+                self.write_status_on_exit_status(exit_status, false).await;
             }
         }
 
@@ -215,7 +235,11 @@ impl Process {
         Ok(exit_status)
     }
 
-    async fn get_status_on_exit_status(&self, exit_status: ExitStatus) -> Status {
+    async fn get_status_on_exit_status(
+        &self,
+        exit_status: ExitStatus,
+        handler_dropped: bool,
+    ) -> Status {
         if exit_status.success() {
             return Status::Terminated(TerminationStatus::TerminatedSuccessfully);
         };
@@ -223,6 +247,10 @@ impl Process {
         match exit_status.code() {
             Some(code) => match code {
                 1 if cfg!(target_os = "windows") && self.child_killed_successfuly => {
+                    if handler_dropped {
+                        return Status::Terminated(TerminationStatus::KilledByDroppingHandler);
+                    }
+
                     Status::Terminated(TerminationStatus::Killed)
                 }
                 _ => Status::Terminated(TerminationStatus::TerminatedWithError(
@@ -230,6 +258,10 @@ impl Process {
                 )),
             },
             None if cfg!(target_os = "linux") && self.child_killed_successfuly => {
+                if handler_dropped {
+                    return Status::Terminated(TerminationStatus::KilledByDroppingHandler);
+                }
+
                 Status::Terminated(TerminationStatus::Killed)
             }
             _ => Status::Terminated(TerminationStatus::TerminatedWithError(
@@ -238,8 +270,10 @@ impl Process {
         }
     }
 
-    async fn write_status_on_exit_status(&self, exit_status: ExitStatus) {
-        let status = self.get_status_on_exit_status(exit_status).await;
+    async fn write_status_on_exit_status(&self, exit_status: ExitStatus, handler_dropped: bool) {
+        let status = self
+            .get_status_on_exit_status(exit_status, handler_dropped)
+            .await;
         self.write_status(status).await;
     }
 
@@ -256,8 +290,14 @@ pub enum ProcessRunError {
     CouldNotCreateProcess(#[source] IoError),
     #[error("Could not wait for process: {0}")]
     CouldNotWaitForProcess(#[source] IoError),
-    #[error("Corresponding ProcessHandler was dropped")]
+    #[error("Corresponding ProcessHandler was dropped. Should be infallible")]
     HandlerDropped,
+    #[error("{0}")]
+    ProcessKillAndWaitError(
+        #[source]
+        #[from]
+        ProcessKillAndWaitError,
+    ),
 }
 
 #[derive(ThisError, Debug)]
@@ -333,8 +373,8 @@ mod tests {
             args: vec![path_str],
             current_dir: ".".to_owned(),
             stdin: Stdio::piped(),
-            stdout: Stdio::inherit(),
-            stderr: Stdio::inherit(),
+            stdout: Stdio::piped(),
+            stderr: Stdio::piped(),
             kill_on_drop: true,
         }
     }
@@ -451,7 +491,7 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn run_numbers_script_with_error_code_and_expect_error_code_1() {
-        let (mut process, _) = create_numbers_process_with_error_code();
+        let (mut process, _handler) = create_numbers_process_with_error_code();
         let args = create_number_process_with_error_code_run_args();
 
         let result = process.run(args).await;
@@ -477,6 +517,21 @@ mod tests {
         match handler.cancel().await {
             Err(CancellationError::ProcessDropped) => {}
             _ => panic!("Unexpected result"),
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn drop_handler_and_expect_killed_by_dropping_handler() {
+        let (mut process, _) = create_numbers_process_with_error_code();
+        let args = create_number_process_with_error_code_run_args();
+
+        let result = process.run(args).await;
+
+        match result {
+            Ok(Status::Terminated(TerminationStatus::KilledByDroppingHandler)) => {}
+            Err(e) => panic!("Unexpected error: {:?}", e),
+            _ => panic!("Unexpected result: {:?}", result),
         }
     }
 
