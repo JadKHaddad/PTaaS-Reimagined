@@ -91,7 +91,7 @@ impl ProcessHandler {
 
         cancel_channel_receiver
             .await
-            .map_err(|_| CancellationError::CouldNotReceiveFromChannel)
+            .map_err(|_| CancellationError::ProcessDropped)
     }
 
     pub async fn status(&self) -> Status {
@@ -163,12 +163,12 @@ impl Process {
                         self.write_status_on_exit_status(exit_status).await;
 
                         if cancel_channel_sender.send(None).is_err() {
-                            return Err(ProcessRunError::CouldNotSendThroughChannel);
+                            return Err(ProcessRunError::HandlerDropped);
                         }
                     }
                     Err(e) => {
                         if cancel_channel_sender.send(Some(e)).is_err() {
-                            return Err(ProcessRunError::CouldNotSendThroughChannel);
+                            return Err(ProcessRunError::HandlerDropped);
                         }
                     }
                 }
@@ -254,8 +254,8 @@ pub enum ProcessRunError {
     CouldNotCreateProcess(#[source] IoError),
     #[error("Could not wait for process: {0}")]
     CouldNotWaitForProcess(#[source] IoError),
-    #[error("Could not send cancellation result through channel")]
-    CouldNotSendThroughChannel,
+    #[error("Corresponding ProcessHandler was dropped")]
+    HandlerDropped,
 }
 
 #[derive(ThisError, Debug)]
@@ -272,8 +272,8 @@ pub enum ProcessKillAndWaitError {
 pub enum CancellationError {
     #[error("Cancellation is already requested")]
     AlreadyCancelled,
-    #[error("Could not receive cancellation result from channel")]
-    CouldNotReceiveFromChannel,
+    #[error("Corresponding Process was dropped")]
+    ProcessDropped,
 }
 
 #[cfg(test)]
