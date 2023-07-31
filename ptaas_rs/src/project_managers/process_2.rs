@@ -63,7 +63,7 @@ where
     S: AsRef<OsStr>,
     P: AsRef<Path>,
 {
-    type Error = ProcessRunError;
+    type Error = IoError;
 
     fn try_from(value: NewProcessArgs<I, S, P>) -> Result<Self, Self::Error> {
         let stdout = if value.stdout_sender.is_some() {
@@ -86,7 +86,6 @@ where
             .stderr(stderr)
             .kill_on_drop(value.kill_on_drop)
             .spawn()
-            .map_err(ProcessRunError::CouldNotCreateProcess)
     }
 }
 
@@ -187,7 +186,8 @@ impl Process {
         let stdout_sender = new_process_args.stdout_sender.take();
         let stderr_sender = new_process_args.stderr_sender.take();
 
-        let mut child = Child::try_from(new_process_args)?;
+        let mut child =
+            Child::try_from(new_process_args).map_err(ProcessRunError::CouldNotCreateProcess)?;
 
         self.write_status(Status::Running).await;
 
