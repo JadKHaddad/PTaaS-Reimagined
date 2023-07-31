@@ -8,11 +8,9 @@ use std::{
 
 use thiserror::Error as ThisError;
 use tokio::{
+    io::{self, AsyncBufReadExt, AsyncRead},
     process::{Child, ChildStderr, ChildStdout, Command},
-    sync::{
-        oneshot::{Receiver, Sender},
-        RwLock,
-    },
+    sync::{mpsc, oneshot, RwLock},
 };
 
 #[derive(Debug, Clone)]
@@ -50,14 +48,13 @@ pub struct Output {
 
 /// Used in the constructor of `Process` to pass arguments, to improve readability.
 #[derive(Debug)]
-pub struct NewProcessArgs<I, S, P, T> {
+pub struct NewProcessArgs<I, S, P> {
     pub program: S,
     pub args: I,
     pub current_dir: P,
-    pub stdin: T,
-    pub stdout: T,
-    pub stderr: T,
     pub kill_on_drop: bool,
+    pub stdout_sender: Option<mpsc::Sender<String>>,
+    pub stderr_sender: Option<mpsc::Sender<String>>,
 }
 
 pub struct Process {
@@ -65,17 +62,17 @@ pub struct Process {
     given_id: String,
     child_killed_successfuly: bool,
     /// Option so we can take it
-    cancel_status_channel_sender: Option<Sender<Option<ProcessKillAndWaitError>>>,
+    cancel_status_channel_sender: Option<oneshot::Sender<Option<ProcessKillAndWaitError>>>,
     /// Option so we can take it
-    cancel_channel_receiver: Option<Receiver<()>>,
+    cancel_channel_receiver: Option<oneshot::Receiver<()>>,
 }
 
 pub struct ProcessHandler {
     status: Arc<RwLock<Status>>,
     /// Option so we can take it
-    cancel_channel_sender: Option<Sender<()>>,
+    cancel_channel_sender: Option<oneshot::Sender<()>>,
     /// Option so we can take it
-    cancel_status_channel_receiver: Option<Receiver<Option<ProcessKillAndWaitError>>>,
+    cancel_status_channel_receiver: Option<oneshot::Receiver<Option<ProcessKillAndWaitError>>>,
 }
 
 impl ProcessHandler {
@@ -135,15 +132,14 @@ impl Process {
         *self.status.write().await = status;
     }
 
-    pub async fn run<I, S, P, T>(
+    pub async fn run<I, S, P>(
         &mut self,
-        new_process_args: NewProcessArgs<I, S, P, T>,
+        new_process_args: NewProcessArgs<I, S, P>,
     ) -> Result<Status, ProcessRunError>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
         P: AsRef<Path>,
-        T: Into<Stdio>,
     {
         let cancel_channel_sender = self
             .cancel_status_channel_sender
@@ -155,19 +151,39 @@ impl Process {
             .take()
             .ok_or(ProcessRunError::AlreadyStarted)?;
 
+        let stdout = if new_process_args.stdout_sender.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        };
+
+        let stderr = if new_process_args.stderr_sender.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        };
+
         let mut child = Command::new(new_process_args.program)
             .args(new_process_args.args)
             .current_dir(new_process_args.current_dir)
-            .stdin(new_process_args.stdin)
-            .stdout(new_process_args.stdout)
-            .stderr(new_process_args.stderr)
+            .stdin(Stdio::null())
+            .stdout(stdout)
+            .stderr(stderr)
             .kill_on_drop(new_process_args.kill_on_drop)
             .spawn()
             .map_err(ProcessRunError::CouldNotCreateProcess)?;
 
         self.write_status(Status::Running).await;
 
-        // do io piping
+        if let Some(sender) = new_process_args.stdout_sender {
+            let stdout = child.stdout.take().expect("stdout was not piped");
+            Self::forward_io_to_channel(stdout, sender);
+        }
+
+        if let Some(sender) = new_process_args.stderr_sender {
+            let stderr = child.stderr.take().expect("stderr was not piped");
+            Self::forward_io_to_channel(stderr, sender);
+        }
 
         tokio::select! {
             result = cancel_channel_receiver => {
@@ -280,6 +296,21 @@ impl Process {
     pub async fn status(&self) -> Status {
         self.status.read().await.clone()
     }
+
+    fn forward_io_to_channel<T: AsyncRead + Unpin + Send + 'static>(
+        stdio: T,
+        sender: mpsc::Sender<String>,
+    ) {
+        let reader = io::BufReader::new(stdio);
+        let mut lines = reader.lines();
+        tokio::spawn(async move {
+            while let Ok(Some(line)) = lines.next_line().await {
+                if sender.send(line).await.is_err() {
+                    break;
+                }
+            }
+        });
+    }
 }
 
 #[derive(ThisError, Debug)]
@@ -363,7 +394,7 @@ mod tests {
     fn create_process_args(
         program: String,
         path: PathBuf,
-    ) -> NewProcessArgs<Vec<String>, String, String, Stdio> {
+    ) -> NewProcessArgs<Vec<String>, String, String> {
         let path_str = path
             .to_str()
             .expect("Error converting path to string.")
@@ -372,10 +403,9 @@ mod tests {
             program,
             args: vec![path_str],
             current_dir: ".".to_owned(),
-            stdin: Stdio::piped(),
-            stdout: Stdio::piped(),
-            stderr: Stdio::piped(),
             kill_on_drop: true,
+            stdout_sender: None,
+            stderr_sender: None,
         }
     }
 
@@ -383,7 +413,7 @@ mod tests {
         Process::new("numbers_process".into())
     }
 
-    fn create_number_process_run_args() -> NewProcessArgs<Vec<String>, String, String, Stdio> {
+    fn create_number_process_run_args() -> NewProcessArgs<Vec<String>, String, String> {
         let path = get_numbers_script_path();
         create_process_args(program().to_owned(), path)
     }
@@ -393,7 +423,7 @@ mod tests {
     }
 
     fn create_number_process_with_error_code_run_args(
-    ) -> NewProcessArgs<Vec<String>, String, String, Stdio> {
+    ) -> NewProcessArgs<Vec<String>, String, String> {
         let path = get_numbers_script_with_error_code_path();
         create_process_args(program().to_owned(), path)
     }
@@ -402,8 +432,7 @@ mod tests {
         Process::new("non_existing_process".into())
     }
 
-    fn create_non_existing_process_run_args() -> NewProcessArgs<Vec<String>, String, String, Stdio>
-    {
+    fn create_non_existing_process_run_args() -> NewProcessArgs<Vec<String>, String, String> {
         let path = PathBuf::from("non_existing_process");
         create_process_args("non_existing_process".to_owned(), path)
     }
