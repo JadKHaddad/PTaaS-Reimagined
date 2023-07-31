@@ -57,6 +57,39 @@ pub struct NewProcessArgs<I, S, P> {
     pub stderr_sender: Option<mpsc::Sender<String>>,
 }
 
+impl<I, S, P> TryFrom<NewProcessArgs<I, S, P>> for Child
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+    P: AsRef<Path>,
+{
+    type Error = ProcessRunError;
+
+    fn try_from(value: NewProcessArgs<I, S, P>) -> Result<Self, Self::Error> {
+        let stdout = if value.stdout_sender.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        };
+
+        let stderr = if value.stderr_sender.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        };
+
+        Command::new(value.program)
+            .args(value.args)
+            .current_dir(value.current_dir)
+            .stdin(Stdio::null())
+            .stdout(stdout)
+            .stderr(stderr)
+            .kill_on_drop(value.kill_on_drop)
+            .spawn()
+            .map_err(ProcessRunError::CouldNotCreateProcess)
+    }
+}
+
 pub struct Process {
     status: Arc<RwLock<Status>>,
     given_id: String,
@@ -134,7 +167,7 @@ impl Process {
 
     pub async fn run<I, S, P>(
         &mut self,
-        new_process_args: NewProcessArgs<I, S, P>,
+        mut new_process_args: NewProcessArgs<I, S, P>,
     ) -> Result<Status, ProcessRunError>
     where
         I: IntoIterator<Item = S>,
@@ -151,36 +184,19 @@ impl Process {
             .take()
             .ok_or(ProcessRunError::AlreadyStarted)?;
 
-        let stdout = if new_process_args.stdout_sender.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        };
+        let stdout_sender = new_process_args.stdout_sender.take();
+        let stderr_sender = new_process_args.stderr_sender.take();
 
-        let stderr = if new_process_args.stderr_sender.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        };
-
-        let mut child = Command::new(new_process_args.program)
-            .args(new_process_args.args)
-            .current_dir(new_process_args.current_dir)
-            .stdin(Stdio::null())
-            .stdout(stdout)
-            .stderr(stderr)
-            .kill_on_drop(new_process_args.kill_on_drop)
-            .spawn()
-            .map_err(ProcessRunError::CouldNotCreateProcess)?;
+        let mut child = Child::try_from(new_process_args)?;
 
         self.write_status(Status::Running).await;
 
-        if let Some(sender) = new_process_args.stdout_sender {
+        if let Some(sender) = stdout_sender {
             let stdout = child.stdout.take().expect("stdout was not piped");
             Self::forward_io_to_channel(stdout, sender);
         }
 
-        if let Some(sender) = new_process_args.stderr_sender {
+        if let Some(sender) = stderr_sender {
             let stderr = child.stderr.take().expect("stderr was not piped");
             Self::forward_io_to_channel(stderr, sender);
         }
