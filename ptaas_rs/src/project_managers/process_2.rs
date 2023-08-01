@@ -59,9 +59,7 @@ pub struct RunProcessArgs<I, S, P> {
 pub struct Process {
     status: Arc<RwLock<Status>>,
     given_id: String,
-    /// Option so we can take it
     cancel_status_channel_sender: oneshot::Sender<Option<ProcessKillAndWaitError>>,
-    /// Option so we can take it
     cancel_channel_receiver: oneshot::Receiver<()>,
 }
 
@@ -619,7 +617,6 @@ mod tests {
 
     #[tokio::test]
     #[traced_test]
-
     async fn pipe_stdout() {
         let (process, _handler) = create_numbers_process();
         let (stdout_sender, stdout_receiver) = mpsc::channel(10);
