@@ -72,7 +72,8 @@ pub struct ProcessHandler {
 }
 
 impl ProcessHandler {
-    /// Will deadlock if corresponding `Process` has not been started.
+    /// Blocks until the corresponding `Process` is terminated.
+    /// Will deadlock if the corresponding `Process` has not been started.
     pub async fn cancel(&mut self) -> Result<Option<ProcessKillAndWaitError>, CancellationError> {
         let cancel_channel_sender = self
             .cancel_channel_sender
