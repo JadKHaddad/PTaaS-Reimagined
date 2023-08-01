@@ -46,13 +46,12 @@ pub struct Output {
     pub stderr: Option<ChildStderr>,
 }
 
-/// Used in the constructor of `Process` to pass arguments, to improve readability.
+/// Used `Process::run` to pass arguments, to improve readability.
 #[derive(Debug)]
-pub struct NewProcessArgs<I, S, P> {
+pub struct RunProcessArgs<I, S, P> {
     pub program: S,
     pub args: I,
     pub current_dir: P,
-    pub kill_on_drop: bool,
     pub stdout_sender: Option<mpsc::Sender<String>>,
     pub stderr_sender: Option<mpsc::Sender<String>>,
 }
@@ -60,11 +59,10 @@ pub struct NewProcessArgs<I, S, P> {
 pub struct Process {
     status: Arc<RwLock<Status>>,
     given_id: String,
-    child_killed_successfuly: bool,
     /// Option so we can take it
-    cancel_status_channel_sender: Option<oneshot::Sender<Option<ProcessKillAndWaitError>>>,
+    cancel_status_channel_sender: oneshot::Sender<Option<ProcessKillAndWaitError>>,
     /// Option so we can take it
-    cancel_channel_receiver: Option<oneshot::Receiver<()>>,
+    cancel_channel_receiver: oneshot::Receiver<()>,
 }
 
 pub struct ProcessHandler {
@@ -114,9 +112,8 @@ impl Process {
         let process = Self {
             status: status.clone(),
             given_id,
-            child_killed_successfuly: false,
-            cancel_status_channel_sender: Some(cancel_status_channel_sender),
-            cancel_channel_receiver: Some(cancel_channel_receiver),
+            cancel_status_channel_sender,
+            cancel_channel_receiver,
         };
 
         let process_handler = ProcessHandler {
@@ -128,71 +125,70 @@ impl Process {
         (process, process_handler)
     }
 
-    pub async fn write_status(&self, status: Status) {
-        *self.status.write().await = status;
+    pub async fn write_status(old_status: &Arc<RwLock<Status>>, new_status: Status) {
+        *old_status.write().await = new_status;
     }
 
     pub async fn run<I, S, P>(
-        &mut self,
-        new_process_args: NewProcessArgs<I, S, P>,
+        self,
+        run_process_args: RunProcessArgs<I, S, P>,
     ) -> Result<Status, ProcessRunError>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
         P: AsRef<Path>,
     {
-        let cancel_channel_sender = self
-            .cancel_status_channel_sender
-            .take()
-            .ok_or(ProcessRunError::AlreadyStarted)?;
+        let cancel_channel_sender = self.cancel_status_channel_sender;
 
-        let cancel_channel_receiver = self
-            .cancel_channel_receiver
-            .take()
-            .ok_or(ProcessRunError::AlreadyStarted)?;
+        let cancel_channel_receiver = self.cancel_channel_receiver;
 
-        let stdout = if new_process_args.stdout_sender.is_some() {
+        let status = self.status;
+
+        let RunProcessArgs {
+            program,
+            args,
+            current_dir,
+            stdout_sender,
+            stderr_sender,
+        } = run_process_args;
+
+        let stdout = if stdout_sender.is_some() {
             Stdio::piped()
         } else {
             Stdio::null()
         };
 
-        let stderr = if new_process_args.stderr_sender.is_some() {
+        let stderr = if stderr_sender.is_some() {
             Stdio::piped()
         } else {
             Stdio::null()
         };
 
-        let mut child = Command::new(new_process_args.program)
-            .args(new_process_args.args)
-            .current_dir(new_process_args.current_dir)
+        let mut child = Command::new(program)
+            .args(args)
+            .current_dir(current_dir)
             .stdin(Stdio::null())
             .stdout(stdout)
             .stderr(stderr)
-            .kill_on_drop(new_process_args.kill_on_drop)
             .spawn()
             .map_err(ProcessRunError::CouldNotCreateProcess)?;
 
-        self.write_status(Status::Running).await;
+        Self::write_status(&status, Status::Running).await;
 
-        if let Some(sender) = new_process_args.stdout_sender {
-            let stdout = child.stdout.take().expect("stdout expected to be some");
-            Self::forward_io_to_channel(stdout, sender);
-        }
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
 
-        if let Some(sender) = new_process_args.stderr_sender {
-            let stderr = child.stderr.take().expect("stderr expected to be some");
-            Self::forward_io_to_channel(stderr, sender);
-        }
+        Self::forward_ios_to_channels(stdout, stderr, stdout_sender, stderr_sender, self.given_id);
 
         tokio::select! {
             result = cancel_channel_receiver => {
                 if result.is_ok() {
                     // The process was explicitly cancelled by the handler
                     // Cancelation errors are sent to the handler and this function returns
-                    match self.check_if_still_running_and_kill_and_wait(child).await {
-                        Ok(exit_status) => {
-                            self.write_status_on_exit_status(exit_status, false).await;
+                    match Self::check_if_still_running_and_kill_and_wait(child).await {
+                        Ok((exit_status, child_killed_successfully)) => {
+                            let new_status = Self::get_status_on_exit_status(exit_status, child_killed_successfully, false).await;
+                            Self::write_status(&status, new_status).await;
 
                             if cancel_channel_sender.send(None).is_err() {
                                 return Err(ProcessRunError::HandlerDropped);
@@ -207,53 +203,54 @@ impl Process {
                 }
                 else {
                     // The handler was dropped, wich means we can't send the cancelation error, so we return it here
-                    let exit_status = self.check_if_still_running_and_kill_and_wait(child).await?;
-                    self.write_status_on_exit_status(exit_status, true).await;
+                    let (exit_status, child_killed_successfully) = Self::check_if_still_running_and_kill_and_wait(child).await?;
+                    let new_status = Self::get_status_on_exit_status(exit_status, child_killed_successfully, true).await;
+                    Self::write_status(&status, new_status).await;
                 }
             }
 
             result_exit_status = child.wait() => {
                 let exit_status = result_exit_status.map_err(ProcessRunError::CouldNotWaitForProcess)?;
-                self.write_status_on_exit_status(exit_status, false).await;
+                let new_status = Self::get_status_on_exit_status(exit_status, false, false).await;
+                Self::write_status(&status, new_status).await;
             }
         }
 
-        let status = self.status().await;
+        let status = status.read().await.clone();
 
         Ok(status)
     }
 
     async fn check_if_still_running_and_kill_and_wait(
-        &mut self,
         mut child: Child,
-    ) -> Result<ExitStatus, ProcessKillAndWaitError> {
+    ) -> Result<(ExitStatus, bool), ProcessKillAndWaitError> {
         let option_exit_status = child
             .try_wait()
             .map_err(ProcessKillAndWaitError::CouldNotCheckStatus)?;
 
-        let exit_status = match option_exit_status {
-            Some(exit_status) => exit_status,
+        let (exit_status, killed_successfully) = match option_exit_status {
+            Some(exit_status) => (exit_status, false),
             None => {
                 child
                     .kill()
                     .await
                     .map_err(ProcessKillAndWaitError::CouldNotKillProcess)?;
 
-                self.child_killed_successfuly = true;
-
-                child
+                let exit_status = child
                     .wait()
                     .await
-                    .map_err(ProcessKillAndWaitError::CouldNotWaitForProcess)?
+                    .map_err(ProcessKillAndWaitError::CouldNotWaitForProcess)?;
+
+                (exit_status, true)
             }
         };
 
-        Ok(exit_status)
+        Ok((exit_status, killed_successfully))
     }
 
     async fn get_status_on_exit_status(
-        &self,
         exit_status: ExitStatus,
+        child_killed_successfuly: bool,
         handler_dropped: bool,
     ) -> Status {
         if exit_status.success() {
@@ -262,7 +259,7 @@ impl Process {
 
         match exit_status.code() {
             Some(code) => match code {
-                1 if cfg!(target_os = "windows") && self.child_killed_successfuly => {
+                1 if cfg!(target_os = "windows") && child_killed_successfuly => {
                     if handler_dropped {
                         return Status::Terminated(TerminationStatus::KilledByDroppingHandler);
                     }
@@ -273,7 +270,7 @@ impl Process {
                     TerminationWithErrorStatus::TerminatedWithErrorCode(code),
                 )),
             },
-            None if cfg!(target_os = "linux") && self.child_killed_successfuly => {
+            None if cfg!(target_os = "linux") && child_killed_successfuly => {
                 if handler_dropped {
                     return Status::Terminated(TerminationStatus::KilledByDroppingHandler);
                 }
@@ -286,37 +283,49 @@ impl Process {
         }
     }
 
-    async fn write_status_on_exit_status(&self, exit_status: ExitStatus, handler_dropped: bool) {
-        let status = self
-            .get_status_on_exit_status(exit_status, handler_dropped)
-            .await;
-        self.write_status(status).await;
-    }
+    fn forward_ios_to_channels(
+        stdout: Option<ChildStdout>,
+        stderr: Option<ChildStderr>,
+        stdout_sender: Option<mpsc::Sender<String>>,
+        stderr_sender: Option<mpsc::Sender<String>>,
+        given_id: String,
+    ) {
+        if let Some(sender) = stdout_sender {
+            if let Some(stdout) = stdout {
+                Self::forward_io_to_channel(stdout, sender, given_id.clone(), "stdout");
+            }
+        }
 
-    pub async fn status(&self) -> Status {
-        self.status.read().await.clone()
+        if let Some(sender) = stderr_sender {
+            if let Some(stderr) = stderr {
+                Self::forward_io_to_channel(stderr, sender, given_id, "stderr");
+            }
+        }
     }
 
     fn forward_io_to_channel<T: AsyncRead + Unpin + Send + 'static>(
         stdio: T,
         sender: mpsc::Sender<String>,
+        given_id: String,
+        io_name: &'static str,
     ) {
         let reader = io::BufReader::new(stdio);
         let mut lines = reader.lines();
+
         tokio::spawn(async move {
+            tracing::debug!(given_id, io_name, "Starting to forward IO");
             while let Ok(Some(line)) = lines.next_line().await {
                 if sender.send(line).await.is_err() {
                     break;
                 }
             }
+            tracing::debug!(given_id, io_name, "Finished forwarding IO");
         });
     }
 }
 
 #[derive(ThisError, Debug)]
 pub enum ProcessRunError {
-    #[error("Process has already been started, can not start again")]
-    AlreadyStarted,
     #[error("Could not create process: {0}")]
     CouldNotCreateProcess(#[source] IoError),
     #[error("Could not wait for process: {0}")]
@@ -394,18 +403,19 @@ mod tests {
     fn create_process_args(
         program: String,
         path: PathBuf,
-    ) -> NewProcessArgs<Vec<String>, String, String> {
+        stdout_sender: Option<mpsc::Sender<String>>,
+        stderr_sender: Option<mpsc::Sender<String>>,
+    ) -> RunProcessArgs<Vec<String>, String, String> {
         let path_str = path
             .to_str()
             .expect("Error converting path to string.")
             .to_owned();
-        NewProcessArgs {
+        RunProcessArgs {
             program,
             args: vec![path_str],
             current_dir: ".".to_owned(),
-            kill_on_drop: true,
-            stdout_sender: None,
-            stderr_sender: None,
+            stdout_sender,
+            stderr_sender,
         }
     }
 
@@ -413,9 +423,17 @@ mod tests {
         Process::new("numbers_process".into())
     }
 
-    fn create_number_process_run_args() -> NewProcessArgs<Vec<String>, String, String> {
+    fn create_number_process_run_args() -> RunProcessArgs<Vec<String>, String, String> {
         let path = get_numbers_script_path();
-        create_process_args(program().to_owned(), path)
+        create_process_args(program().to_owned(), path, None, None)
+    }
+
+    fn create_number_process_run_args_with_channels(
+        stdout_sender: Option<mpsc::Sender<String>>,
+        stderr_sender: Option<mpsc::Sender<String>>,
+    ) -> RunProcessArgs<Vec<String>, String, String> {
+        let path = get_numbers_script_path();
+        create_process_args(program().to_owned(), path, stdout_sender, stderr_sender)
     }
 
     fn create_numbers_process_with_error_code() -> (Process, ProcessHandler) {
@@ -423,24 +441,60 @@ mod tests {
     }
 
     fn create_number_process_with_error_code_run_args(
-    ) -> NewProcessArgs<Vec<String>, String, String> {
+    ) -> RunProcessArgs<Vec<String>, String, String> {
         let path = get_numbers_script_with_error_code_path();
-        create_process_args(program().to_owned(), path)
+        create_process_args(program().to_owned(), path, None, None)
+    }
+
+    fn create_number_process_with_error_code_run_args_with_channels(
+        stdout_sender: Option<mpsc::Sender<String>>,
+        stderr_sender: Option<mpsc::Sender<String>>,
+    ) -> RunProcessArgs<Vec<String>, String, String> {
+        let path = get_numbers_script_with_error_code_path();
+        create_process_args(program().to_owned(), path, stdout_sender, stderr_sender)
     }
 
     fn create_non_existing_process() -> (Process, ProcessHandler) {
         Process::new("non_existing_process".into())
     }
 
-    fn create_non_existing_process_run_args() -> NewProcessArgs<Vec<String>, String, String> {
+    fn create_non_existing_process_run_args() -> RunProcessArgs<Vec<String>, String, String> {
         let path = PathBuf::from("non_existing_process");
-        create_process_args("non_existing_process".to_owned(), path)
+        create_process_args("non_existing_process".to_owned(), path, None, None)
+    }
+
+    fn assert_exit_with_error_code_1(result: Result<Status, ProcessRunError>) {
+        match result {
+            Ok(Status::Terminated(TerminationStatus::TerminatedWithError(
+                TerminationWithErrorStatus::TerminatedWithErrorCode(code),
+            ))) => {
+                assert_eq!(code, 1);
+            }
+            Err(e) => panic!("Unexpected error: {:?}", e),
+            _ => panic!("Unexpected result: {:?}", result),
+        }
+    }
+
+    fn assert_terminated_successfully(result: Result<Status, ProcessRunError>) {
+        match result {
+            Ok(Status::Terminated(TerminationStatus::TerminatedSuccessfully)) => {}
+            Err(e) => panic!("Unexpected error: {:?}", e),
+            _ => panic!("Unexpected result: {:?}", result),
+        }
+    }
+
+    fn assert_killed(result: Result<Status, ProcessRunError>) {
+        match result {
+            Ok(Status::Terminated(TerminationStatus::Killed)) => {}
+            Err(e) => panic!("Unexpected error: {:?}", e),
+            _ => panic!("Unexpected result: {:?}", result),
+        }
     }
 
     #[tokio::test]
     #[traced_test]
     async fn run_non_existing_process_and_expect_not_found() {
-        let (mut process, _) = create_non_existing_process();
+        let (process, _) = create_non_existing_process();
         let args = create_non_existing_process_run_args();
 
         let result = process.run(args).await;
@@ -460,7 +514,7 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn run_numbers_script_and_kill_before_termination_and_expect_killed() {
-        let (mut process, mut handler) = create_numbers_process();
+        let (process, mut handler) = create_numbers_process();
         let args = create_number_process_run_args();
 
         tokio::spawn(async move {
@@ -470,28 +524,20 @@ mod tests {
 
         let result = process.run(args).await;
 
-        match result {
-            Ok(Status::Terminated(TerminationStatus::Killed)) => {}
-            Err(e) => panic!("Unexpected error: {:?}", e),
-            _ => panic!("Unexpected result: {:?}", result),
-        }
+        assert_killed(result)
     }
 
     #[tokio::test]
     #[traced_test]
     async fn run_numbers_script_and_kill_before_start_and_expect_killed() {
-        let (mut process, mut handler) = create_numbers_process();
+        let (process, mut handler) = create_numbers_process();
         let args = create_number_process_run_args();
 
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(2)).await;
             let result = process.run(args).await;
 
-            match result {
-                Ok(Status::Terminated(TerminationStatus::Killed)) => {}
-                Err(e) => panic!("Unexpected error: {:?}", e),
-                _ => panic!("Unexpected result: {:?}", result),
-            }
+            assert_killed(result)
         });
 
         handler.cancel().await.expect("Error cancelling process.");
@@ -500,7 +546,7 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn run_numbers_script_and_kill_after_termination_and_expect_terminated_successfully() {
-        let (mut process, mut handler) = create_numbers_process();
+        let (process, mut handler) = create_numbers_process();
         let args = create_number_process_run_args();
 
         tokio::spawn(async move {
@@ -510,30 +556,18 @@ mod tests {
 
         let result = process.run(args).await;
 
-        match result {
-            Ok(Status::Terminated(TerminationStatus::TerminatedSuccessfully)) => {}
-            Err(e) => panic!("Unexpected error: {:?}", e),
-            _ => panic!("Unexpected result: {:?}", result),
-        }
+        assert_terminated_successfully(result);
     }
 
     #[tokio::test]
     #[traced_test]
     async fn run_numbers_script_with_error_code_and_expect_error_code_1() {
-        let (mut process, _handler) = create_numbers_process_with_error_code();
+        let (process, _handler) = create_numbers_process_with_error_code();
         let args = create_number_process_with_error_code_run_args();
 
         let result = process.run(args).await;
 
-        match result {
-            Ok(Status::Terminated(TerminationStatus::TerminatedWithError(
-                TerminationWithErrorStatus::TerminatedWithErrorCode(code),
-            ))) => {
-                assert_eq!(code, 1);
-            }
-            Err(e) => panic!("Unexpected error: {:?}", e),
-            _ => panic!("Unexpected result: {:?}", result),
-        }
+        assert_exit_with_error_code_1(result);
     }
 
     #[tokio::test]
@@ -552,7 +586,7 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn drop_handler_and_expect_killed_by_dropping_handler() {
-        let (mut process, _) = create_numbers_process_with_error_code();
+        let (process, _) = create_numbers_process_with_error_code();
         let args = create_number_process_with_error_code_run_args();
 
         let result = process.run(args).await;
@@ -567,7 +601,7 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn cancel_a_process_twice_and_excpect_error() {
-        let (mut process, mut handler) = create_numbers_process();
+        let (process, mut handler) = create_numbers_process();
         let args = create_number_process_run_args();
 
         tokio::spawn(async move {
@@ -581,5 +615,61 @@ mod tests {
         });
 
         process.run(args).await.expect("Error running process.");
+    }
+
+    #[tokio::test]
+    #[traced_test]
+
+    async fn pipe_stdout() {
+        let (process, _handler) = create_numbers_process();
+        let (stdout_sender, stdout_receiver) = mpsc::channel(10);
+
+        let args = create_number_process_run_args_with_channels(Some(stdout_sender), None);
+
+        tokio::spawn(async move {
+            let mut lines: Vec<String> = Vec::new();
+            let mut stdout = stdout_receiver;
+
+            while let Some(line) = stdout.recv().await {
+                lines.push(line);
+            }
+
+            let expected_lines: Vec<String> =
+                vec!["1", "2", "3"].iter().map(|s| s.to_string()).collect();
+
+            assert_eq!(lines, expected_lines);
+        });
+
+        let result = process.run(args).await;
+
+        assert_terminated_successfully(result)
+    }
+
+    #[tokio::test]
+    #[traced_test]
+
+    async fn pipe_stderr() {
+        let (process, _handler) = create_numbers_process_with_error_code();
+        let (stderr_sender, stderr_receiver) = mpsc::channel(10);
+
+        let args =
+            create_number_process_with_error_code_run_args_with_channels(None, Some(stderr_sender));
+
+        tokio::spawn(async move {
+            let mut lines: Vec<String> = Vec::new();
+            let mut stderr = stderr_receiver;
+
+            while let Some(line) = stderr.recv().await {
+                lines.push(line);
+            }
+
+            let expected_first_line = String::from("Error message");
+
+            assert!(lines[0].contains(&expected_first_line));
+        });
+
+        let result = process.run(args).await;
+
+        assert_exit_with_error_code_1(result)
     }
 }

@@ -5,4 +5,6 @@ while ($i -le 1) {
     Start-Sleep -Seconds 1
 }
 
+Write-Error "Error message"
+
 exit 1

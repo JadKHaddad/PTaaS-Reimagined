@@ -8,4 +8,6 @@ do
     sleep 1
 done
 
+echo "Error message" >&2
+
 exit 1
