@@ -87,11 +87,11 @@ impl ProcessHandler {
 
         cancel_channel_sender
             .send(())
-            .map_err(|_| CancellationError::ProcessDropped)?;
+            .map_err(|_| CancellationError::ProcessTerminated)?;
 
         cancel_channel_receiver
             .await
-            .map_err(|_| CancellationError::ProcessDropped)
+            .map_err(|_| CancellationError::ProcessTerminated)
     }
 
     pub async fn status(&self) -> Status {
@@ -329,9 +329,9 @@ pub enum ProcessRunError {
     CouldNotCreateProcess(#[source] IoError),
     #[error("Could not wait for process: {0}")]
     CouldNotWaitForProcess(#[source] IoError),
-    #[error("Corresponding ProcessHandler was dropped. Should be infallible")]
+    #[error("Corresponding ProcessHandler was dropped after sending cancellation signal!. Should be infallible")]
     HandlerDropped,
-    #[error("{0}")]
+    #[error("An error occured while killing and waiting for the process: {0}")]
     ProcessKillAndWaitError(
         #[source]
         #[from]
@@ -351,12 +351,10 @@ pub enum ProcessKillAndWaitError {
 
 #[derive(ThisError, Debug)]
 pub enum CancellationError {
-    #[error("Cancellation is already requested")]
-    AlreadyCancelled,
-    #[error("Cancellation can only be requested once")]
+    #[error("Cancellation signal can only be sent once")]
     AlreayTriedToCancel,
-    #[error("Corresponding Process was dropped")]
-    ProcessDropped,
+    #[error("Corresponding Process terminated already")]
+    ProcessTerminated,
 }
 
 #[cfg(test)]
@@ -516,14 +514,15 @@ mod tests {
         let (process, mut handler) = create_numbers_process();
         let args = create_number_process_run_args();
 
-        tokio::spawn(async move {
+        let tast_handler = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(2)).await;
             handler.cancel().await.expect("Error cancelling process.");
         });
 
         let result = process.run(args).await;
+        assert_killed(result);
 
-        assert_killed(result)
+        tast_handler.await.expect("Error waiting for handler.");
     }
 
     #[tokio::test]
@@ -532,7 +531,7 @@ mod tests {
         let (process, mut handler) = create_numbers_process();
         let args = create_number_process_run_args();
 
-        tokio::spawn(async move {
+        let task_handler = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(2)).await;
             let result = process.run(args).await;
 
@@ -540,22 +539,30 @@ mod tests {
         });
 
         handler.cancel().await.expect("Error cancelling process.");
+
+        task_handler.await.expect("Error waiting for handler.");
     }
 
     #[tokio::test]
     #[traced_test]
-    async fn run_numbers_script_and_kill_after_termination_and_expect_terminated_successfully() {
+    async fn run_numbers_script_and_kill_after_termination_and_expect_terminated_successfully_and_process_terminated(
+    ) {
         let (process, mut handler) = create_numbers_process();
         let args = create_number_process_run_args();
 
-        tokio::spawn(async move {
+        let task_handler = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(5)).await;
-            handler.cancel().await.expect("Error cancelling process.");
+            let result = handler.cancel().await;
+            match result {
+                Err(CancellationError::ProcessTerminated) => {}
+                _ => panic!("Unexpected result: {:?}", result),
+            }
         });
 
         let result = process.run(args).await;
-
         assert_terminated_successfully(result);
+
+        task_handler.await.expect("Error waiting for handler.");
     }
 
     #[tokio::test]
@@ -565,7 +572,6 @@ mod tests {
         let args = create_number_process_with_error_code_run_args();
 
         let result = process.run(args).await;
-
         assert_exit_with_error_code_1(result);
     }
 
@@ -577,7 +583,7 @@ mod tests {
         drop(process);
 
         match handler.cancel().await {
-            Err(CancellationError::ProcessDropped) => {}
+            Err(CancellationError::ProcessTerminated) => {}
             _ => panic!("Unexpected result"),
         }
     }
@@ -603,17 +609,19 @@ mod tests {
         let (process, mut handler) = create_numbers_process();
         let args = create_number_process_run_args();
 
-        tokio::spawn(async move {
+        let task_handler = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(2)).await;
             handler.cancel().await.expect("Error cancelling process.");
 
             match handler.cancel().await {
-                Err(CancellationError::AlreadyCancelled) => {}
+                Err(CancellationError::AlreayTriedToCancel) => {}
                 _ => panic!("Unexpected result"),
             }
         });
 
         process.run(args).await.expect("Error running process.");
+
+        task_handler.await.expect("Error awaiting handler.");
     }
 
     #[tokio::test]
@@ -624,7 +632,7 @@ mod tests {
 
         let args = create_number_process_run_args_with_channels(Some(stdout_sender), None);
 
-        tokio::spawn(async move {
+        let task_handler = tokio::spawn(async move {
             let mut lines: Vec<String> = Vec::new();
             let mut stdout = stdout_receiver;
 
@@ -639,8 +647,9 @@ mod tests {
         });
 
         let result = process.run(args).await;
+        assert_terminated_successfully(result);
 
-        assert_terminated_successfully(result)
+        task_handler.await.expect("Error awaiting handler.");
     }
 
     #[tokio::test]
@@ -653,7 +662,7 @@ mod tests {
         let args =
             create_number_process_with_error_code_run_args_with_channels(None, Some(stderr_sender));
 
-        tokio::spawn(async move {
+        let task_handler = tokio::spawn(async move {
             let mut lines: Vec<String> = Vec::new();
             let mut stderr = stderr_receiver;
 
@@ -667,7 +676,8 @@ mod tests {
         });
 
         let result = process.run(args).await;
+        assert_exit_with_error_code_1(result);
 
-        assert_exit_with_error_code_1(result)
+        task_handler.await.expect("Error awaiting handler.");
     }
 }
