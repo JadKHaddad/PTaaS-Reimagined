@@ -124,10 +124,6 @@ impl Process {
         (process, process_handler)
     }
 
-    pub async fn write_status(old_status: &Arc<RwLock<Status>>, new_status: Status) {
-        *old_status.write().await = new_status;
-    }
-
     pub async fn run<I, S, P>(
         self,
         run_process_args: RunProcessArgs<I, S, P>,
@@ -280,6 +276,10 @@ impl Process {
                 TerminationWithErrorStatus::TerminatedWithUnknownErrorCode,
             )),
         }
+    }
+
+    async fn write_status(old_status: &Arc<RwLock<Status>>, new_status: Status) {
+        *old_status.write().await = new_status;
     }
 
     fn forward_ios_to_channels(
