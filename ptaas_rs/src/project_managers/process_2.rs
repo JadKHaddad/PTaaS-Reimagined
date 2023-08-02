@@ -183,15 +183,11 @@ impl Process {
                             let new_status = Self::get_status_on_exit_status(exit_status, child_killed_successfully, false).await;
                             self.status_holder.overwrite(new_status).await;
 
-                            if cancel_channel_sender.send(None).is_err() {
-                                return Err(ProcessRunError::ControllerDropped);
-                            }
+                            cancel_channel_sender
+                                .send(None).map_err(|_| ProcessRunError::ControllerDropped)?;
                         }
-                        Err(e) => {
-                            if cancel_channel_sender.send(Some(e)).is_err() {
-                                return Err(ProcessRunError::ControllerDropped);
-                            }
-                        }
+                        Err(e) => cancel_channel_sender.send(Some(e))
+                            .map_err(|_| ProcessRunError::ControllerDropped)?
                     }
                 }
                 else {
@@ -226,17 +222,8 @@ impl Process {
         S: AsRef<OsStr>,
         P: AsRef<Path>,
     {
-        let stdout = if stdout_sender.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        };
-
-        let stderr = if stderr_sender.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        };
+        let stdout = Self::pipe_if_some_or_null(stdout_sender);
+        let stderr = Self::pipe_if_some_or_null(stderr_sender);
 
         Command::new(program)
             .args(args)
@@ -244,7 +231,15 @@ impl Process {
             .stdin(Stdio::null())
             .stdout(stdout)
             .stderr(stderr)
+            .kill_on_drop(true)
             .spawn()
+    }
+
+    fn pipe_if_some_or_null<T>(sender: &Option<T>) -> Stdio {
+        sender
+            .as_ref()
+            .map(|_| Stdio::piped())
+            .unwrap_or(Stdio::null())
     }
 
     async fn check_if_still_running_and_kill_and_wait(
