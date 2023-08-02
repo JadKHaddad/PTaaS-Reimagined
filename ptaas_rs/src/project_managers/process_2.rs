@@ -235,8 +235,8 @@ impl Process {
             .spawn()
     }
 
-    fn pipe_if_some_or_null<T>(sender: &Option<T>) -> Stdio {
-        sender
+    fn pipe_if_some_or_null<T>(option: &Option<T>) -> Stdio {
+        option
             .as_ref()
             .map(|_| Stdio::piped())
             .unwrap_or(Stdio::null())
