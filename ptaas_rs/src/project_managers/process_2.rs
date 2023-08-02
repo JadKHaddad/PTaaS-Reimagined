@@ -1,7 +1,6 @@
 use std::{
     ffi::OsStr,
     io::Error as IoError,
-    ops::Deref,
     path::Path,
     process::{ExitStatus, Stdio},
     sync::Arc,
@@ -40,16 +39,9 @@ pub enum TerminationWithErrorStatus {
     TerminatedWithErrorCode(i32),
 }
 
-#[derive(Debug)]
-pub struct Output {
-    pub status: Status,
-    pub stdout: Option<ChildStdout>,
-    pub stderr: Option<ChildStderr>,
-}
-
 /// Used `Process::run` to pass arguments, to improve readability.
 #[derive(Debug)]
-pub struct RunProcessArgs<I, S, P> {
+pub struct OsProcessArgs<I, S, P> {
     pub program: S,
     pub args: I,
     pub current_dir: P,
@@ -70,14 +62,6 @@ impl StatusHolder {
     async fn status(&self) -> Status {
         self.status.read().await.clone()
     }
-}
-
-pub struct Process {
-    status_holder: StatusHolder,
-    given_id: String,
-    given_name: String,
-    cancel_status_channel_sender: oneshot::Sender<Option<ProcessKillAndWaitError>>,
-    cancel_channel_receiver: oneshot::Receiver<()>,
 }
 
 pub struct ProcessController {
@@ -116,6 +100,14 @@ impl ProcessController {
     }
 }
 
+pub struct Process {
+    status_holder: StatusHolder,
+    given_id: String,
+    given_name: String,
+    cancel_status_channel_sender: oneshot::Sender<Option<ProcessKillAndWaitError>>,
+    cancel_channel_receiver: oneshot::Receiver<()>,
+}
+
 impl Process {
     #[must_use]
     pub fn new(given_id: String, given_name: String) -> (Self, ProcessController) {
@@ -145,7 +137,7 @@ impl Process {
 
     pub async fn run<I, S, P>(
         self,
-        run_process_args: RunProcessArgs<I, S, P>,
+        os_process_args: OsProcessArgs<I, S, P>,
     ) -> Result<Status, ProcessRunError>
     where
         I: IntoIterator<Item = S>,
@@ -155,13 +147,13 @@ impl Process {
         let cancel_channel_sender = self.cancel_status_channel_sender;
         let cancel_channel_receiver = self.cancel_channel_receiver;
 
-        let RunProcessArgs {
+        let OsProcessArgs {
             program,
             args,
             current_dir,
             stdout_sender,
             stderr_sender,
-        } = run_process_args;
+        } = os_process_args;
 
         let mut child =
             Self::spawn_os_process(program, args, current_dir, &stdout_sender, &stderr_sender)
@@ -185,7 +177,7 @@ impl Process {
             result = cancel_channel_receiver => {
                 if result.is_ok() {
                     // The process was explicitly cancelled by the controller
-                    // Cancelation errors are sent to the controller and this function returns
+                    // Cancellation errors are sent to the controller and this function returns
                     match Self::check_if_still_running_and_kill_and_wait(child).await {
                         Ok((exit_status, child_killed_successfully)) => {
                             let new_status = Self::get_status_on_exit_status(exit_status, child_killed_successfully, false).await;
@@ -445,12 +437,12 @@ mod tests {
         path: PathBuf,
         stdout_sender: Option<mpsc::Sender<String>>,
         stderr_sender: Option<mpsc::Sender<String>>,
-    ) -> RunProcessArgs<Vec<String>, String, String> {
+    ) -> OsProcessArgs<Vec<String>, String, String> {
         let path_str = path
             .to_str()
             .expect("Error converting path to string.")
             .to_owned();
-        RunProcessArgs {
+        OsProcessArgs {
             program,
             args: vec![path_str],
             current_dir: ".".to_owned(),
@@ -463,7 +455,7 @@ mod tests {
         Process::new("some_id".into(), "numbers_process".into())
     }
 
-    fn create_number_process_run_args() -> RunProcessArgs<Vec<String>, String, String> {
+    fn create_number_process_run_args() -> OsProcessArgs<Vec<String>, String, String> {
         let path = get_numbers_script_path();
         create_process_args(program().to_owned(), path, None, None)
     }
@@ -471,7 +463,7 @@ mod tests {
     fn create_number_process_run_args_with_channels(
         stdout_sender: Option<mpsc::Sender<String>>,
         stderr_sender: Option<mpsc::Sender<String>>,
-    ) -> RunProcessArgs<Vec<String>, String, String> {
+    ) -> OsProcessArgs<Vec<String>, String, String> {
         let path = get_numbers_script_path();
         create_process_args(program().to_owned(), path, stdout_sender, stderr_sender)
     }
@@ -480,8 +472,8 @@ mod tests {
         Process::new("some_id".into(), "numbers_process_with_error_code".into())
     }
 
-    fn create_number_process_with_error_code_run_args(
-    ) -> RunProcessArgs<Vec<String>, String, String> {
+    fn create_number_process_with_error_code_run_args() -> OsProcessArgs<Vec<String>, String, String>
+    {
         let path = get_numbers_script_with_error_code_path();
         create_process_args(program().to_owned(), path, None, None)
     }
@@ -489,7 +481,7 @@ mod tests {
     fn create_number_process_with_error_code_run_args_with_channels(
         stdout_sender: Option<mpsc::Sender<String>>,
         stderr_sender: Option<mpsc::Sender<String>>,
-    ) -> RunProcessArgs<Vec<String>, String, String> {
+    ) -> OsProcessArgs<Vec<String>, String, String> {
         let path = get_numbers_script_with_error_code_path();
         create_process_args(program().to_owned(), path, stdout_sender, stderr_sender)
     }
@@ -498,7 +490,7 @@ mod tests {
         Process::new("some_id".into(), "non_existing_process".into())
     }
 
-    fn create_non_existing_process_run_args() -> RunProcessArgs<Vec<String>, String, String> {
+    fn create_non_existing_process_run_args() -> OsProcessArgs<Vec<String>, String, String> {
         let path = PathBuf::from("non_existing_process");
         create_process_args("non_existing_process".to_owned(), path, None, None)
     }
