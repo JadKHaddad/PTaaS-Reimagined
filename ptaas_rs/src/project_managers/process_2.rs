@@ -314,7 +314,7 @@ impl Process {
     ) {
         if let Some(sender) = stdout_sender {
             if let Some(stdout) = stdout {
-                Self::forward_io_to_channel(
+                Self::forward_io(
                     stdout,
                     sender,
                     given_id.clone(),
@@ -326,12 +326,12 @@ impl Process {
 
         if let Some(sender) = stderr_sender {
             if let Some(stderr) = stderr {
-                Self::forward_io_to_channel(stderr, sender, given_id, given_name, "stderr");
+                Self::forward_io(stderr, sender, given_id, given_name, "stderr");
             }
         }
     }
 
-    fn forward_io_to_channel<T: AsyncRead + Unpin + Send + 'static>(
+    fn forward_io<T: AsyncRead + Unpin + Send + 'static>(
         stdio: T,
         sender: mpsc::Sender<String>,
         given_id: String,
