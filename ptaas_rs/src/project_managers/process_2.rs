@@ -114,9 +114,8 @@ impl Process {
         let status = Arc::new(RwLock::new(Status::Created));
         let status_holder = StatusHolder { status };
 
-        let (cancel_status_channel_sender, cancel_status_channel_receiver) =
-            tokio::sync::oneshot::channel();
-        let (cancel_channel_sender, cancel_channel_receiver) = tokio::sync::oneshot::channel();
+        let (cancel_status_channel_sender, cancel_status_channel_receiver) = oneshot::channel();
+        let (cancel_channel_sender, cancel_channel_receiver) = oneshot::channel();
 
         let process = Self {
             status_holder: status_holder.clone(),
