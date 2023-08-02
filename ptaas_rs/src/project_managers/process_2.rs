@@ -1,6 +1,7 @@
 use std::{
     ffi::OsStr,
     io::Error as IoError,
+    ops::Deref,
     path::Path,
     process::{ExitStatus, Stdio},
     sync::Arc,
@@ -24,7 +25,7 @@ pub enum Status {
 pub enum TerminationStatus {
     /// Explicitly killed by this library.
     Killed,
-    KilledByDroppingHandler,
+    KilledByDroppingController,
     TerminatedSuccessfully,
     TerminatedWithError(TerminationWithErrorStatus),
 }
@@ -56,22 +57,38 @@ pub struct RunProcessArgs<I, S, P> {
     pub stderr_sender: Option<mpsc::Sender<String>>,
 }
 
-pub struct Process {
+#[derive(Clone)]
+struct StatusHolder {
     status: Arc<RwLock<Status>>,
+}
+
+impl StatusHolder {
+    async fn overwrite(&self, status: Status) {
+        *self.status.write().await = status;
+    }
+
+    async fn status(&self) -> Status {
+        self.status.read().await.clone()
+    }
+}
+
+pub struct Process {
+    status_holder: StatusHolder,
     given_id: String,
+    given_name: String,
     cancel_status_channel_sender: oneshot::Sender<Option<ProcessKillAndWaitError>>,
     cancel_channel_receiver: oneshot::Receiver<()>,
 }
 
-pub struct ProcessHandler {
-    status: Arc<RwLock<Status>>,
+pub struct ProcessController {
+    status_holder: StatusHolder,
     /// Option so we can take it
     cancel_channel_sender: Option<oneshot::Sender<()>>,
     /// Option so we can take it
     cancel_status_channel_receiver: Option<oneshot::Receiver<Option<ProcessKillAndWaitError>>>,
 }
 
-impl ProcessHandler {
+impl ProcessController {
     /// Blocks until the corresponding `Process` is terminated.
     /// Will deadlock if the corresponding `Process` has not been started.
     pub async fn cancel(&mut self) -> Result<Option<ProcessKillAndWaitError>, CancellationError> {
@@ -95,33 +112,35 @@ impl ProcessHandler {
     }
 
     pub async fn status(&self) -> Status {
-        self.status.read().await.clone()
+        self.status_holder.status().await
     }
 }
 
 impl Process {
     #[must_use]
-    pub fn new(given_id: String) -> (Self, ProcessHandler) {
+    pub fn new(given_id: String, given_name: String) -> (Self, ProcessController) {
         let status = Arc::new(RwLock::new(Status::Created));
+        let status_holder = StatusHolder { status };
 
         let (cancel_status_channel_sender, cancel_status_channel_receiver) =
             tokio::sync::oneshot::channel();
         let (cancel_channel_sender, cancel_channel_receiver) = tokio::sync::oneshot::channel();
 
         let process = Self {
-            status: status.clone(),
+            status_holder: status_holder.clone(),
             given_id,
+            given_name,
             cancel_status_channel_sender,
             cancel_channel_receiver,
         };
 
-        let process_handler = ProcessHandler {
-            status,
+        let process_controller = ProcessController {
+            status_holder,
             cancel_channel_sender: Some(cancel_channel_sender),
             cancel_status_channel_receiver: Some(cancel_status_channel_receiver),
         };
 
-        (process, process_handler)
+        (process, process_controller)
     }
 
     pub async fn run<I, S, P>(
@@ -134,10 +153,7 @@ impl Process {
         P: AsRef<Path>,
     {
         let cancel_channel_sender = self.cancel_status_channel_sender;
-
         let cancel_channel_receiver = self.cancel_channel_receiver;
-
-        let status = self.status;
 
         let RunProcessArgs {
             program,
@@ -147,6 +163,77 @@ impl Process {
             stderr_sender,
         } = run_process_args;
 
+        let mut child =
+            Self::spawn_os_process(program, args, current_dir, &stdout_sender, &stderr_sender)
+                .map_err(ProcessRunError::CouldNotSpawnOsProcess)?;
+
+        self.status_holder.overwrite(Status::Running).await;
+
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+
+        Self::forward_ios_to_channels(
+            stdout,
+            stderr,
+            stdout_sender,
+            stderr_sender,
+            self.given_id,
+            self.given_name,
+        );
+
+        tokio::select! {
+            result = cancel_channel_receiver => {
+                if result.is_ok() {
+                    // The process was explicitly cancelled by the controller
+                    // Cancelation errors are sent to the controller and this function returns
+                    match Self::check_if_still_running_and_kill_and_wait(child).await {
+                        Ok((exit_status, child_killed_successfully)) => {
+                            let new_status = Self::get_status_on_exit_status(exit_status, child_killed_successfully, false).await;
+                            self.status_holder.overwrite(new_status).await;
+
+                            if cancel_channel_sender.send(None).is_err() {
+                                return Err(ProcessRunError::ControllerDropped);
+                            }
+                        }
+                        Err(e) => {
+                            if cancel_channel_sender.send(Some(e)).is_err() {
+                                return Err(ProcessRunError::ControllerDropped);
+                            }
+                        }
+                    }
+                }
+                else {
+                    // The controller was dropped, wich means we can't send the cancelation error, so we return it here
+                    let (exit_status, child_killed_successfully) = Self::check_if_still_running_and_kill_and_wait(child).await?;
+                    let new_status = Self::get_status_on_exit_status(exit_status, child_killed_successfully, true).await;
+                    self.status_holder.overwrite(new_status).await;
+                }
+            }
+
+            result_exit_status = child.wait() => {
+                let exit_status = result_exit_status.map_err(ProcessRunError::CouldNotWaitForOsProcess)?;
+                let new_status = Self::get_status_on_exit_status(exit_status, false, false).await;
+                self.status_holder.overwrite(new_status).await;
+            }
+        }
+
+        let status = self.status_holder.status().await;
+
+        Ok(status)
+    }
+
+    fn spawn_os_process<I, S, P>(
+        program: S,
+        args: I,
+        current_dir: P,
+        stdout_sender: &Option<mpsc::Sender<String>>,
+        stderr_sender: &Option<mpsc::Sender<String>>,
+    ) -> Result<Child, IoError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+        P: AsRef<Path>,
+    {
         let stdout = if stdout_sender.is_some() {
             Stdio::piped()
         } else {
@@ -159,61 +246,13 @@ impl Process {
             Stdio::null()
         };
 
-        let mut child = Command::new(program)
+        Command::new(program)
             .args(args)
             .current_dir(current_dir)
             .stdin(Stdio::null())
             .stdout(stdout)
             .stderr(stderr)
             .spawn()
-            .map_err(ProcessRunError::CouldNotCreateProcess)?;
-
-        Self::write_status(&status, Status::Running).await;
-
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-
-        Self::forward_ios_to_channels(stdout, stderr, stdout_sender, stderr_sender, self.given_id);
-
-        tokio::select! {
-            result = cancel_channel_receiver => {
-                if result.is_ok() {
-                    // The process was explicitly cancelled by the handler
-                    // Cancelation errors are sent to the handler and this function returns
-                    match Self::check_if_still_running_and_kill_and_wait(child).await {
-                        Ok((exit_status, child_killed_successfully)) => {
-                            let new_status = Self::get_status_on_exit_status(exit_status, child_killed_successfully, false).await;
-                            Self::write_status(&status, new_status).await;
-
-                            if cancel_channel_sender.send(None).is_err() {
-                                return Err(ProcessRunError::HandlerDropped);
-                            }
-                        }
-                        Err(e) => {
-                            if cancel_channel_sender.send(Some(e)).is_err() {
-                                return Err(ProcessRunError::HandlerDropped);
-                            }
-                        }
-                    }
-                }
-                else {
-                    // The handler was dropped, wich means we can't send the cancelation error, so we return it here
-                    let (exit_status, child_killed_successfully) = Self::check_if_still_running_and_kill_and_wait(child).await?;
-                    let new_status = Self::get_status_on_exit_status(exit_status, child_killed_successfully, true).await;
-                    Self::write_status(&status, new_status).await;
-                }
-            }
-
-            result_exit_status = child.wait() => {
-                let exit_status = result_exit_status.map_err(ProcessRunError::CouldNotWaitForProcess)?;
-                let new_status = Self::get_status_on_exit_status(exit_status, false, false).await;
-                Self::write_status(&status, new_status).await;
-            }
-        }
-
-        let status = status.read().await.clone();
-
-        Ok(status)
     }
 
     async fn check_if_still_running_and_kill_and_wait(
@@ -223,7 +262,7 @@ impl Process {
             .try_wait()
             .map_err(ProcessKillAndWaitError::CouldNotCheckStatus)?;
 
-        let (exit_status, killed_successfully) = match option_exit_status {
+        let (exit_status, killed) = match option_exit_status {
             Some(exit_status) => (exit_status, false),
             None => {
                 child
@@ -240,13 +279,13 @@ impl Process {
             }
         };
 
-        Ok((exit_status, killed_successfully))
+        Ok((exit_status, killed))
     }
 
     async fn get_status_on_exit_status(
         exit_status: ExitStatus,
         child_killed_successfuly: bool,
-        handler_dropped: bool,
+        controller_dropped: bool,
     ) -> Status {
         if exit_status.success() {
             return Status::Terminated(TerminationStatus::TerminatedSuccessfully);
@@ -255,8 +294,8 @@ impl Process {
         match exit_status.code() {
             Some(code) => match code {
                 1 if cfg!(target_os = "windows") && child_killed_successfuly => {
-                    if handler_dropped {
-                        return Status::Terminated(TerminationStatus::KilledByDroppingHandler);
+                    if controller_dropped {
+                        return Status::Terminated(TerminationStatus::KilledByDroppingController);
                     }
 
                     Status::Terminated(TerminationStatus::Killed)
@@ -266,8 +305,8 @@ impl Process {
                 )),
             },
             None if cfg!(target_os = "linux") && child_killed_successfuly => {
-                if handler_dropped {
-                    return Status::Terminated(TerminationStatus::KilledByDroppingHandler);
+                if controller_dropped {
+                    return Status::Terminated(TerminationStatus::KilledByDroppingController);
                 }
 
                 Status::Terminated(TerminationStatus::Killed)
@@ -278,26 +317,29 @@ impl Process {
         }
     }
 
-    async fn write_status(old_status: &Arc<RwLock<Status>>, new_status: Status) {
-        *old_status.write().await = new_status;
-    }
-
     fn forward_ios_to_channels(
         stdout: Option<ChildStdout>,
         stderr: Option<ChildStderr>,
         stdout_sender: Option<mpsc::Sender<String>>,
         stderr_sender: Option<mpsc::Sender<String>>,
         given_id: String,
+        given_name: String,
     ) {
         if let Some(sender) = stdout_sender {
             if let Some(stdout) = stdout {
-                Self::forward_io_to_channel(stdout, sender, given_id.clone(), "stdout");
+                Self::forward_io_to_channel(
+                    stdout,
+                    sender,
+                    given_id.clone(),
+                    given_name.clone(),
+                    "stdout",
+                );
             }
         }
 
         if let Some(sender) = stderr_sender {
             if let Some(stderr) = stderr {
-                Self::forward_io_to_channel(stderr, sender, given_id, "stderr");
+                Self::forward_io_to_channel(stderr, sender, given_id, given_name, "stderr");
             }
         }
     }
@@ -306,31 +348,32 @@ impl Process {
         stdio: T,
         sender: mpsc::Sender<String>,
         given_id: String,
+        given_name: String,
         io_name: &'static str,
     ) {
         let reader = io::BufReader::new(stdio);
         let mut lines = reader.lines();
 
         tokio::spawn(async move {
-            tracing::debug!(given_id, io_name, "Starting to forward IO");
+            tracing::debug!(given_id, io_name, given_name, "Starting to forward IO");
             while let Ok(Some(line)) = lines.next_line().await {
                 if sender.send(line).await.is_err() {
                     break;
                 }
             }
-            tracing::debug!(given_id, io_name, "Finished forwarding IO");
+            tracing::debug!(given_id, io_name, given_name, "Finished forwarding IO");
         });
     }
 }
 
 #[derive(ThisError, Debug)]
 pub enum ProcessRunError {
-    #[error("Could not create process: {0}")]
-    CouldNotCreateProcess(#[source] IoError),
-    #[error("Could not wait for process: {0}")]
-    CouldNotWaitForProcess(#[source] IoError),
-    #[error("Corresponding ProcessHandler was dropped after sending cancellation signal!. Should be infallible")]
-    HandlerDropped,
+    #[error("Could not spawn os process: {0}")]
+    CouldNotSpawnOsProcess(#[source] IoError),
+    #[error("Could not wait for os process: {0}")]
+    CouldNotWaitForOsProcess(#[source] IoError),
+    #[error("Corresponding ProcessController was dropped after sending cancellation signal!. Should be infallible")]
+    ControllerDropped,
     #[error("An error occured while killing and waiting for the process: {0}")]
     ProcessKillAndWaitError(
         #[source]
@@ -416,8 +459,8 @@ mod tests {
         }
     }
 
-    fn create_numbers_process() -> (Process, ProcessHandler) {
-        Process::new("numbers_process".into())
+    fn create_numbers_process() -> (Process, ProcessController) {
+        Process::new("some_id".into(), "numbers_process".into())
     }
 
     fn create_number_process_run_args() -> RunProcessArgs<Vec<String>, String, String> {
@@ -433,8 +476,8 @@ mod tests {
         create_process_args(program().to_owned(), path, stdout_sender, stderr_sender)
     }
 
-    fn create_numbers_process_with_error_code() -> (Process, ProcessHandler) {
-        Process::new("numbers_process_with_error_code".into())
+    fn create_numbers_process_with_error_code() -> (Process, ProcessController) {
+        Process::new("some_id".into(), "numbers_process_with_error_code".into())
     }
 
     fn create_number_process_with_error_code_run_args(
@@ -451,8 +494,8 @@ mod tests {
         create_process_args(program().to_owned(), path, stdout_sender, stderr_sender)
     }
 
-    fn create_non_existing_process() -> (Process, ProcessHandler) {
-        Process::new("non_existing_process".into())
+    fn create_non_existing_process() -> (Process, ProcessController) {
+        Process::new("some_id".into(), "non_existing_process".into())
     }
 
     fn create_non_existing_process_run_args() -> RunProcessArgs<Vec<String>, String, String> {
@@ -499,7 +542,7 @@ mod tests {
         match result {
             Ok(_) => panic!("Process should not be created."),
             Err(error) => match error {
-                ProcessRunError::CouldNotCreateProcess(io_error) => match io_error.kind() {
+                ProcessRunError::CouldNotSpawnOsProcess(io_error) => match io_error.kind() {
                     std::io::ErrorKind::NotFound => {}
                     _ => panic!("Unexpected error kind: {:?}", io_error.kind()),
                 },
@@ -511,12 +554,15 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn run_numbers_script_and_kill_before_termination_and_expect_killed() {
-        let (process, mut handler) = create_numbers_process();
+        let (process, mut controller) = create_numbers_process();
         let args = create_number_process_run_args();
 
         let tast_handler = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(2)).await;
-            handler.cancel().await.expect("Error cancelling process.");
+            controller
+                .cancel()
+                .await
+                .expect("Error cancelling process.");
         });
 
         let result = process.run(args).await;
@@ -528,7 +574,7 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn run_numbers_script_and_kill_before_start_and_expect_killed() {
-        let (process, mut handler) = create_numbers_process();
+        let (process, mut controller) = create_numbers_process();
         let args = create_number_process_run_args();
 
         let task_handler = tokio::spawn(async move {
@@ -538,7 +584,10 @@ mod tests {
             assert_killed(result)
         });
 
-        handler.cancel().await.expect("Error cancelling process.");
+        controller
+            .cancel()
+            .await
+            .expect("Error cancelling process.");
 
         task_handler.await.expect("Error waiting for handler.");
     }
@@ -547,12 +596,12 @@ mod tests {
     #[traced_test]
     async fn run_numbers_script_and_kill_after_termination_and_expect_terminated_successfully_and_process_terminated(
     ) {
-        let (process, mut handler) = create_numbers_process();
+        let (process, mut controller) = create_numbers_process();
         let args = create_number_process_run_args();
 
         let task_handler = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(5)).await;
-            let result = handler.cancel().await;
+            let result = controller.cancel().await;
             match result {
                 Err(CancellationError::ProcessTerminated) => {}
                 _ => panic!("Unexpected result: {:?}", result),
@@ -568,7 +617,7 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn run_numbers_script_with_error_code_and_expect_error_code_1() {
-        let (process, _handler) = create_numbers_process_with_error_code();
+        let (process, _controller) = create_numbers_process_with_error_code();
         let args = create_number_process_with_error_code_run_args();
 
         let result = process.run(args).await;
@@ -578,11 +627,11 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn cancel_a_dropped_process_and_expect_error() {
-        let (process, mut handler) = create_numbers_process();
+        let (process, mut controller) = create_numbers_process();
 
         drop(process);
 
-        match handler.cancel().await {
+        match controller.cancel().await {
             Err(CancellationError::ProcessTerminated) => {}
             _ => panic!("Unexpected result"),
         }
@@ -590,14 +639,14 @@ mod tests {
 
     #[tokio::test]
     #[traced_test]
-    async fn drop_handler_and_expect_killed_by_dropping_handler() {
+    async fn drop_controller_and_expect_killed_by_dropping_controller() {
         let (process, _) = create_numbers_process_with_error_code();
         let args = create_number_process_with_error_code_run_args();
 
         let result = process.run(args).await;
 
         match result {
-            Ok(Status::Terminated(TerminationStatus::KilledByDroppingHandler)) => {}
+            Ok(Status::Terminated(TerminationStatus::KilledByDroppingController)) => {}
             Err(e) => panic!("Unexpected error: {:?}", e),
             _ => panic!("Unexpected result: {:?}", result),
         }
@@ -606,14 +655,17 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn cancel_a_process_twice_and_excpect_error() {
-        let (process, mut handler) = create_numbers_process();
+        let (process, mut controller) = create_numbers_process();
         let args = create_number_process_run_args();
 
         let task_handler = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(2)).await;
-            handler.cancel().await.expect("Error cancelling process.");
+            controller
+                .cancel()
+                .await
+                .expect("Error cancelling process.");
 
-            match handler.cancel().await {
+            match controller.cancel().await {
                 Err(CancellationError::AlreayTriedToCancel) => {}
                 _ => panic!("Unexpected result"),
             }
@@ -627,7 +679,7 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn pipe_stdout() {
-        let (process, _handler) = create_numbers_process();
+        let (process, _controller) = create_numbers_process();
         let (stdout_sender, stdout_receiver) = mpsc::channel(10);
 
         let args = create_number_process_run_args_with_channels(Some(stdout_sender), None);
@@ -656,7 +708,7 @@ mod tests {
     #[traced_test]
 
     async fn pipe_stderr() {
-        let (process, _handler) = create_numbers_process_with_error_code();
+        let (process, _controller) = create_numbers_process_with_error_code();
         let (stderr_sender, stderr_receiver) = mpsc::channel(10);
 
         let args =
