@@ -222,8 +222,8 @@ impl Process {
         S: AsRef<OsStr>,
         P: AsRef<Path>,
     {
-        let stdout = Self::pipe_if_some_or_null(stdout_sender);
-        let stderr = Self::pipe_if_some_or_null(stderr_sender);
+        let stdout = Self::pipe_if_some_else_null(stdout_sender);
+        let stderr = Self::pipe_if_some_else_null(stderr_sender);
 
         Command::new(program)
             .args(args)
@@ -235,7 +235,7 @@ impl Process {
             .spawn()
     }
 
-    fn pipe_if_some_or_null<T>(option: &Option<T>) -> Stdio {
+    fn pipe_if_some_else_null<T>(option: &Option<T>) -> Stdio {
         option
             .as_ref()
             .map(|_| Stdio::piped())
