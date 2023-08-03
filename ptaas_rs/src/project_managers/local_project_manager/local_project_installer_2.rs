@@ -39,10 +39,7 @@ impl LocalProjectInstaller {
     }
 
     pub async fn check_and_run_installation(&self) -> Result<(), InstallError> {
-        self.check()
-            .await
-            .map_err(StartInstallError::CheckFailed)
-            .map_err(InstallError::StartInstallError)?;
+        self.check().await.map_err(StartInstallError::CheckFailed)?;
 
         let uploaded_project_dir = &self.uploaded_project_dir;
 
