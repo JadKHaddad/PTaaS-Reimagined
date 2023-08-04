@@ -75,15 +75,14 @@ pub struct ProcessController {
 
 impl ProcessController {
     /// Blocks until the corresponding `Process` is terminated.
-    /// Will deadlock if the corresponding `Process` has not been started.
     pub async fn cancel(&mut self) -> Result<Option<ProcessKillAndWaitError>, CancellationError> {
         match self.status_holder.status().await {
             Status::Created => {
-                tracing::debug!(given_id = self.given_id, "Process is not running");
+                tracing::debug!(self.given_id, "Process is not running");
                 return Err(CancellationError::NotRunning);
             }
             Status::Terminated(_) => {
-                tracing::debug!(given_id = self.given_id, "Process is already terminated");
+                tracing::debug!(self.given_id, "Process is already terminated");
                 return Err(CancellationError::ProcessTerminated);
             }
             Status::Running => {}
@@ -99,28 +98,22 @@ impl ProcessController {
             .take()
             .ok_or(CancellationError::AlreayTriedToCancel)?;
 
-        tracing::debug!(
-            given_id = self.given_id,
-            "Sending cancellation signal to process"
-        );
+        tracing::debug!(self.given_id, "Sending cancellation signal to process");
         cancel_channel_sender.send(()).map_err(|_| {
-            tracing::debug!(
-                given_id = self.given_id,
+            tracing::warn!(
+                self.given_id,
                 "Failed to send cancellation signal to process"
             );
             CancellationError::ProcessTerminated
         })?;
 
-        tracing::debug!(given_id = self.given_id, "Waiting for process to terminate");
+        tracing::debug!(self.given_id, "Waiting for process to terminate");
         let cencel_result = cancel_channel_receiver.await.map_err(|_| {
-            tracing::debug!(
-                given_id = self.given_id,
-                "Failed to wait for process to terminate"
-            );
+            tracing::warn!(self.given_id, "Failed to wait for process to terminate");
             CancellationError::ProcessTerminated
         })?;
 
-        tracing::debug!(given_id = self.given_id, "Process terminated");
+        tracing::debug!(self.given_id, "Process terminated");
 
         Ok(cencel_result)
     }
@@ -142,7 +135,7 @@ pub struct Process {
 
 impl Drop for Process {
     fn drop(&mut self) {
-        tracing::debug!(given_id = self.given_id, "Dropping process");
+        tracing::debug!(self.given_id, "Dropping process");
     }
 }
 
@@ -219,8 +212,8 @@ impl Process {
         );
 
         tracing::debug!(
-            given_id = self.given_id,
-            given_name = self.given_name,
+            self.given_id,
+            self.given_name,
             "Running process and waiting for signal"
         );
 
@@ -228,8 +221,8 @@ impl Process {
             result = cancel_channel_receiver => {
                 if result.is_ok() {
                     tracing::debug!(
-                        given_id = self.given_id,
-                        given_name = self.given_name,
+                        self.given_id,
+                        self.given_name,
                         "Process was cancelled by the controller"
                     );
 
@@ -249,8 +242,8 @@ impl Process {
                 }
                 else {
                     tracing::debug!(
-                        given_id = self.given_id,
-                        given_name = self.given_name,
+                        self.given_id,
+                        self.given_name,
                         "Process was cancelled by dropping the controller"
                     );
 
@@ -263,8 +256,8 @@ impl Process {
 
             result_exit_status = child.wait() => {
                 tracing::debug!(
-                    given_id = self.given_id,
-                    given_name = self.given_name,
+                    self.given_id,
+                    self.given_name,
                     "Os process terminated"
                 );
 
@@ -274,11 +267,7 @@ impl Process {
             }
         }
 
-        tracing::debug!(
-            given_id = self.given_id,
-            given_name = self.given_name,
-            "Process finished"
-        );
+        tracing::debug!(self.given_id, self.given_name, "Process finished");
 
         let status = self.status_holder.status().await;
 

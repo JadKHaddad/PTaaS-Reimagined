@@ -2,8 +2,11 @@ use crate::project_managers::process_2::{
     OsProcessArgs, Process, ProcessController, ProcessKillAndWaitError, ProcessRunError, Status,
     TerminationStatus,
 };
+use filetime::FileTime;
+use serde::__private::de;
 use std::io::ErrorKind;
 use std::path::PathBuf;
+use std::time::Duration;
 use std::{io::Error as IoError, path::Path};
 use thiserror::Error as ThisError;
 use tokio::fs::{self, File, ReadDir};
@@ -153,16 +156,20 @@ impl LocalProjectInstaller {
         Ok(())
     }
 
-    async fn delete_environment_dir_if_exists(&self) -> Result<(), IoError> {
+    async fn delete_environment_dir_if_exists(
+        &self,
+    ) -> Result<Vec<IoError>, DeleteEnvironmentDirError> {
         if fs::try_exists(&self.project_env_dir).await? {
-            self.delete_environment_dir().await?;
+            let errors = self.delete_environment_dir().await?;
+            return Ok(errors);
         }
 
-        Ok(())
+        Ok(Vec::new())
     }
 
-    async fn delete_environment_dir(&self) -> Result<(), IoError> {
-        fs::remove_dir_all(&self.project_env_dir).await
+    async fn delete_environment_dir(&self) -> Result<Vec<IoError>, MaxAttemptsExceeded> {
+        remove_dir_all_with_max_attempts_and_delay(5, Duration::from_secs(2), &self.project_env_dir)
+            .await
     }
 
     fn get_requirements_file_path(&self) -> PathBuf {
@@ -407,7 +414,7 @@ pub enum CleanUpError {
         ProcessKillAndWaitError,
     ),
     #[error("Could not delete environment dir: {0}")]
-    CouldNotDeleteEnvironment(#[source] IoError),
+    CouldNotDeleteEnvironment(#[source] DeleteEnvironmentDirError),
 }
 
 #[derive(ThisError, Debug)]
@@ -464,6 +471,48 @@ pub enum CreateFileError {
     FailedToConvertPathBufToString(PathBuf),
 }
 
+#[derive(ThisError, Debug)]
+pub enum DeleteEnvironmentDirError {
+    #[error("Could not check if dir exists: {0}")]
+    CouldNotCheckIfDirExists(
+        #[source]
+        #[from]
+        IoError,
+    ),
+    #[error("{0}")]
+    MaxAttemptsExceeded(
+        #[source]
+        #[from]
+        MaxAttemptsExceeded,
+    ),
+}
+
+#[derive(ThisError, Debug)]
+#[error("Max attempts exceeded")]
+pub struct MaxAttemptsExceeded(Vec<IoError>);
+
+async fn remove_dir_all_with_max_attempts_and_delay(
+    max_attempts: u16,
+    delay: Duration,
+    path: &Path,
+) -> Result<Vec<IoError>, MaxAttemptsExceeded> {
+    let mut errors = Vec::new();
+
+    for _ in 0..max_attempts {
+        tracing::debug!(?path, "Attempting to delete dir");
+        match fs::remove_dir_all(path).await {
+            Ok(_) => return Ok(errors),
+            Err(err) => {
+                tracing::error!(%err, ?path, "Failed to delete dir");
+                errors.push(err);
+                tokio::time::sleep(delay).await;
+            }
+        }
+    }
+
+    Err(MaxAttemptsExceeded(errors))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -501,14 +550,11 @@ mod tests {
     }
 
     mod install_projects {
-        use crate::project_managers::process_2::CancellationError;
-
         use super::*;
 
         #[tokio::test]
         #[traced_test]
-        // TODO: Not working on CI
-        pub async fn install_a_valid_project_and_expect_no_errors() {
+        pub async fn tester() {
             let project_id_and_dir = String::from("valid");
             let uploaded_project_dir = get_uploaded_projects_dir().join(&project_id_and_dir);
             let installed_project_dir = get_installed_projects_dir().join(&project_id_and_dir);
