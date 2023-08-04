@@ -66,6 +66,7 @@ impl StatusHolder {
 
 pub struct ProcessController {
     status_holder: StatusHolder,
+    given_id: String,
     /// Option so we can take it
     cancel_channel_sender: Option<oneshot::Sender<()>>,
     /// Option so we can take it
@@ -86,13 +87,22 @@ impl ProcessController {
             .take()
             .ok_or(CancellationError::AlreayTriedToCancel)?;
 
+        tracing::debug!(
+            given_id = self.given_id,
+            "Sending cancellation signal to process"
+        );
         cancel_channel_sender
             .send(())
             .map_err(|_| CancellationError::ProcessTerminated)?;
 
-        cancel_channel_receiver
+        tracing::debug!(given_id = self.given_id, "Waiting for process to terminate");
+        let cencel_result = cancel_channel_receiver
             .await
-            .map_err(|_| CancellationError::ProcessTerminated)
+            .map_err(|_| CancellationError::ProcessTerminated)?;
+
+        tracing::debug!(given_id = self.given_id, "Process terminated");
+
+        Ok(cencel_result)
     }
 
     pub async fn status(&self) -> Status {
@@ -119,7 +129,7 @@ impl Process {
 
         let process = Self {
             status_holder: status_holder.clone(),
-            given_id,
+            given_id: given_id.clone(),
             given_name,
             cancel_status_channel_sender,
             cancel_channel_receiver,
@@ -127,6 +137,7 @@ impl Process {
 
         let process_controller = ProcessController {
             status_holder,
+            given_id,
             cancel_channel_sender: Some(cancel_channel_sender),
             cancel_status_channel_receiver: Some(cancel_status_channel_receiver),
         };
@@ -168,13 +179,25 @@ impl Process {
             stderr,
             stdout_sender,
             stderr_sender,
-            self.given_id,
-            self.given_name,
+            self.given_id.clone(),
+            self.given_name.clone(),
+        );
+
+        tracing::debug!(
+            given_id = self.given_id,
+            given_name = self.given_name,
+            "Running process and waiting for signal"
         );
 
         tokio::select! {
             result = cancel_channel_receiver => {
                 if result.is_ok() {
+                    tracing::debug!(
+                        given_id = self.given_id,
+                        given_name = self.given_name,
+                        "Process was cancelled by the controller"
+                    );
+
                     // The process was explicitly cancelled by the controller
                     // Cancellation errors are sent to the controller and this function returns
                     match Self::check_if_still_running_and_kill_and_wait(child).await {
@@ -190,6 +213,12 @@ impl Process {
                     }
                 }
                 else {
+                    tracing::debug!(
+                        given_id = self.given_id,
+                        given_name = self.given_name,
+                        "Process was cancelled by dropping the controller"
+                    );
+
                     // The controller was dropped, wich means we can't send the cancelation error, so we return it here
                     let (exit_status, child_killed_successfully) = Self::check_if_still_running_and_kill_and_wait(child).await?;
                     let new_status = Self::get_status_on_exit_status(exit_status, child_killed_successfully, true).await;
@@ -198,11 +227,23 @@ impl Process {
             }
 
             result_exit_status = child.wait() => {
+                tracing::debug!(
+                    given_id = self.given_id,
+                    given_name = self.given_name,
+                    "Os process terminated"
+                );
+
                 let exit_status = result_exit_status.map_err(ProcessRunError::CouldNotWaitForOsProcess)?;
                 let new_status = Self::get_status_on_exit_status(exit_status, false, false).await;
                 self.status_holder.overwrite(new_status).await;
             }
         }
+
+        tracing::debug!(
+            given_id = self.given_id,
+            given_name = self.given_name,
+            "Process finished"
+        );
 
         let status = self.status_holder.status().await;
 

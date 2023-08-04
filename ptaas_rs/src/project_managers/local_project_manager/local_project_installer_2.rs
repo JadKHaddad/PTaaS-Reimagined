@@ -3,7 +3,9 @@ use std::{io::Error as IoError, path::Path};
 use thiserror::Error as ThisError;
 use tokio::fs::{self, File, ReadDir};
 
-use crate::project_managers::process_2::{ProcessKillAndWaitError, ProcessRunError};
+use crate::project_managers::process_2::{
+    OsProcessArgs, Process, ProcessKillAndWaitError, ProcessRunError, Status, TerminationStatus,
+};
 
 pub struct LocalProjectInstaller {
     id: String,
@@ -68,6 +70,72 @@ impl LocalProjectInstaller {
                 .ok_or(StartInstallError::FailedToConvertPathBufToString(
                     pip_path.clone(),
                 ))?;
+
+        // Create venv process
+        let (venv_process, mut venv_controller) = Process::new(
+            String::from("venv_id"),
+            String::from("install_venv_process"),
+        );
+        let venv_process_cmd = format!("python3 -m venv {}", project_env_dir_str);
+        let venv_process_args = OsProcessArgs {
+            program,
+            args: vec![first_arg, &venv_process_cmd],
+            current_dir: ".",
+            stdout_sender: None,
+            stderr_sender: None,
+        };
+
+        // Create req process
+        let (req_process, mut req_controller) =
+            Process::new(String::from("req_id"), String::from("install_req_process"));
+        let req_process_cmd = format!("{} install -r {}", pip_path_str, requirements_file_path_str);
+        let req_process_args = OsProcessArgs {
+            program,
+            args: vec![first_arg, &req_process_cmd],
+            current_dir: ".",
+            stdout_sender: None,
+            stderr_sender: None,
+        };
+
+        tokio::select! {
+            _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {
+                let res = venv_controller.cancel().await;
+
+                //let _ = req_controller.cancel().await;
+                println!("\n\n\n10 seconds passed!\n\n\n");
+                println!("\n\n\nvenv_controller.cancel().await: {:?}\n\n\n", res);
+            }
+
+            venv_res = venv_process.run(venv_process_args) => {
+                match venv_res {
+                    Ok(status) => {
+                        match status {
+                            Status::Terminated(TerminationStatus::TerminatedSuccessfully) => {
+                                tokio::select! {
+                                    _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
+
+                                        let res = req_controller.cancel().await;
+                                        println!("\n\n\nreq_controller.cancel().await: {:?}\n\n\n", res);
+                                    }
+
+                                    _ = req_process.run(req_process_args) => {
+
+                                    }
+                                }
+                            },
+                            _ => {
+                                println!("\n\n\nvenv process failed with status: {:?}\n\n\n", status);
+                            }
+                        }
+                    },
+                    Err(e) => {
+                        println!("\n\n\nvenv process failed with error: {:?}\n\n\n", e);
+                    },
+                }
+            }
+
+
+        }
 
         // TODO: Now we select!
         // 1. wait for stop signal
@@ -390,4 +458,84 @@ pub enum CreateFileError {
     ),
     #[error("Could not convert path buf to string: {0}")]
     FailedToConvertPathBufToString(PathBuf),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+    use tracing_test::traced_test;
+
+    const CRATE_DIR: &str = env!("CARGO_MANIFEST_DIR");
+
+    fn get_tests_dir() -> PathBuf {
+        Path::new(CRATE_DIR).join("tests_dir")
+    }
+
+    fn get_uploaded_projects_dir() -> PathBuf {
+        get_tests_dir().join("uploaded_projects")
+    }
+
+    fn get_installed_projects_dir() -> PathBuf {
+        get_tests_dir().join("installed_projects")
+    }
+
+    fn get_environments_dir() -> PathBuf {
+        get_tests_dir().join("environments")
+    }
+
+    async fn delete_gitkeep(dir: &Path) {
+        tokio::fs::remove_file(dir.join(".gitkeep"))
+            .await
+            .expect("Could not delete .gitkeep");
+    }
+
+    async fn restore_gitkeep(dir: &Path) {
+        tokio::fs::File::create(dir.join(".gitkeep"))
+            .await
+            .expect("Could not restore .gitkeep");
+    }
+
+    mod install_projects {
+        use super::*;
+
+        #[tokio::test]
+        #[traced_test]
+        // TODO: Not working on CI
+        pub async fn install_a_valid_project_and_expect_no_errors() {
+            let project_id_and_dir = String::from("valid");
+            let uploaded_project_dir = get_uploaded_projects_dir().join(&project_id_and_dir);
+            let installed_project_dir = get_installed_projects_dir().join(&project_id_and_dir);
+            let project_env_dir = get_environments_dir().join(&project_id_and_dir);
+
+            let installer = LocalProjectInstaller {
+                id: project_id_and_dir,
+                uploaded_project_dir,
+                installed_project_dir,
+                project_env_dir,
+            };
+
+            match installer.check_and_run_installation().await {
+                Ok(_) => {
+                    println!("Installation successful");
+                }
+                Err(e) => panic!("Unexpected error: {}", e),
+            }
+
+            installer
+                .delete_environment_dir_if_exists()
+                .await
+                .expect("Could not delete environment dir");
+
+            let error_file_path = installer.get_process_err_file_path();
+            let error_output = fs::read_to_string(error_file_path)
+                .await
+                .expect("Could not read error file");
+
+            let output_file_path = installer.get_process_out_file_path();
+            let output_output = fs::read_to_string(output_file_path)
+                .await
+                .expect("Could not read output file");
+        }
+    }
 }
