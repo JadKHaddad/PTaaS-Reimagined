@@ -91,14 +91,22 @@ impl ProcessController {
             given_id = self.given_id,
             "Sending cancellation signal to process"
         );
-        cancel_channel_sender
-            .send(())
-            .map_err(|_| CancellationError::ProcessTerminated)?;
+        cancel_channel_sender.send(()).map_err(|_| {
+            tracing::debug!(
+                given_id = self.given_id,
+                "Failed to send cancellation signal to process"
+            );
+            CancellationError::ProcessTerminated
+        })?;
 
         tracing::debug!(given_id = self.given_id, "Waiting for process to terminate");
-        let cencel_result = cancel_channel_receiver
-            .await
-            .map_err(|_| CancellationError::ProcessTerminated)?;
+        let cencel_result = cancel_channel_receiver.await.map_err(|_| {
+            tracing::debug!(
+                given_id = self.given_id,
+                "Failed to wait for process to terminate"
+            );
+            CancellationError::ProcessTerminated
+        })?;
 
         tracing::debug!(given_id = self.given_id, "Process terminated");
 
@@ -114,8 +122,16 @@ pub struct Process {
     status_holder: StatusHolder,
     given_id: String,
     given_name: String,
-    cancel_status_channel_sender: oneshot::Sender<Option<ProcessKillAndWaitError>>,
-    cancel_channel_receiver: oneshot::Receiver<()>,
+    /// Option so we can take it
+    cancel_status_channel_sender: Option<oneshot::Sender<Option<ProcessKillAndWaitError>>>,
+    /// Option so we can take it
+    cancel_channel_receiver: Option<oneshot::Receiver<()>>,
+}
+
+impl Drop for Process {
+    fn drop(&mut self) {
+        tracing::debug!(given_id = self.given_id, "Dropping process");
+    }
 }
 
 impl Process {
@@ -131,8 +147,8 @@ impl Process {
             status_holder: status_holder.clone(),
             given_id: given_id.clone(),
             given_name,
-            cancel_status_channel_sender,
-            cancel_channel_receiver,
+            cancel_status_channel_sender: Some(cancel_status_channel_sender),
+            cancel_channel_receiver: Some(cancel_channel_receiver),
         };
 
         let process_controller = ProcessController {
@@ -146,7 +162,7 @@ impl Process {
     }
 
     pub async fn run<I, S, P>(
-        self,
+        &mut self,
         os_process_args: OsProcessArgs<I, S, P>,
     ) -> Result<Status, ProcessRunError>
     where
@@ -154,8 +170,15 @@ impl Process {
         S: AsRef<OsStr>,
         P: AsRef<Path>,
     {
-        let cancel_channel_sender = self.cancel_status_channel_sender;
-        let cancel_channel_receiver = self.cancel_channel_receiver;
+        let cancel_channel_sender = self
+            .cancel_status_channel_sender
+            .take()
+            .ok_or(ProcessRunError::AlreayTriedToRun)?;
+
+        let cancel_channel_receiver = self
+            .cancel_channel_receiver
+            .take()
+            .ok_or(ProcessRunError::AlreayTriedToRun)?;
 
         let OsProcessArgs {
             program,
@@ -395,6 +418,8 @@ impl Process {
 
 #[derive(ThisError, Debug)]
 pub enum ProcessRunError {
+    #[error("Process was already run!")]
+    AlreayTriedToRun,
     #[error("Could not spawn os process: {0}")]
     CouldNotSpawnOsProcess(#[source] IoError),
     #[error("Could not wait for os process: {0}")]
@@ -561,7 +586,7 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn run_non_existing_process_and_expect_not_found() {
-        let (process, _) = create_non_existing_process();
+        let (mut process, _) = create_non_existing_process();
         let args = create_non_existing_process_run_args();
 
         let result = process.run(args).await;
@@ -581,7 +606,7 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn run_numbers_script_and_kill_before_termination_and_expect_killed() {
-        let (process, mut controller) = create_numbers_process();
+        let (mut process, mut controller) = create_numbers_process();
         let args = create_number_process_run_args();
 
         let tast_handler = tokio::spawn(async move {
@@ -601,7 +626,7 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn run_numbers_script_and_kill_before_start_and_expect_killed() {
-        let (process, mut controller) = create_numbers_process();
+        let (mut process, mut controller) = create_numbers_process();
         let args = create_number_process_run_args();
 
         let task_handler = tokio::spawn(async move {
@@ -623,7 +648,7 @@ mod tests {
     #[traced_test]
     async fn run_numbers_script_and_kill_after_termination_and_expect_terminated_successfully_and_process_terminated(
     ) {
-        let (process, mut controller) = create_numbers_process();
+        let (mut process, mut controller) = create_numbers_process();
         let args = create_number_process_run_args();
 
         let task_handler = tokio::spawn(async move {
@@ -644,7 +669,7 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn run_numbers_script_with_error_code_and_expect_error_code_1() {
-        let (process, _controller) = create_numbers_process_with_error_code();
+        let (mut process, _controller) = create_numbers_process_with_error_code();
         let args = create_number_process_with_error_code_run_args();
 
         let result = process.run(args).await;
@@ -654,7 +679,7 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn cancel_a_dropped_process_and_expect_error() {
-        let (process, mut controller) = create_numbers_process();
+        let (mut process, mut controller) = create_numbers_process();
 
         drop(process);
 
@@ -667,7 +692,7 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn drop_controller_and_expect_killed_by_dropping_controller() {
-        let (process, _) = create_numbers_process_with_error_code();
+        let (mut process, _) = create_numbers_process_with_error_code();
         let args = create_number_process_with_error_code_run_args();
 
         let result = process.run(args).await;
@@ -682,7 +707,7 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn cancel_a_process_twice_and_excpect_error() {
-        let (process, mut controller) = create_numbers_process();
+        let (mut process, mut controller) = create_numbers_process();
         let args = create_number_process_run_args();
 
         let task_handler = tokio::spawn(async move {
@@ -706,7 +731,7 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn pipe_stdout() {
-        let (process, _controller) = create_numbers_process();
+        let (mut process, _controller) = create_numbers_process();
         let (stdout_sender, stdout_receiver) = mpsc::channel(10);
 
         let args = create_number_process_run_args_with_channels(Some(stdout_sender), None);
@@ -735,7 +760,7 @@ mod tests {
     #[traced_test]
 
     async fn pipe_stderr() {
-        let (process, _controller) = create_numbers_process_with_error_code();
+        let (mut process, _controller) = create_numbers_process_with_error_code();
         let (stderr_sender, stderr_receiver) = mpsc::channel(10);
 
         let args =

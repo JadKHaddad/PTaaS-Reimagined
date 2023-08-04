@@ -4,7 +4,8 @@ use thiserror::Error as ThisError;
 use tokio::fs::{self, File, ReadDir};
 
 use crate::project_managers::process_2::{
-    OsProcessArgs, Process, ProcessKillAndWaitError, ProcessRunError, Status, TerminationStatus,
+    OsProcessArgs, Process, ProcessController, ProcessKillAndWaitError, ProcessRunError, Status,
+    TerminationStatus,
 };
 
 pub struct LocalProjectInstaller {
@@ -12,6 +13,8 @@ pub struct LocalProjectInstaller {
     uploaded_project_dir: PathBuf,
     installed_project_dir: PathBuf,
     project_env_dir: PathBuf,
+    venv_process: Process,
+    req_process: Process,
 }
 
 struct FileAndStringPath {
@@ -31,16 +34,31 @@ impl LocalProjectInstaller {
         uploaded_project_dir: PathBuf,
         installed_project_dir: PathBuf,
         project_env_dir: PathBuf,
-    ) -> Self {
-        Self {
-            id,
-            uploaded_project_dir,
-            installed_project_dir,
-            project_env_dir,
-        }
+    ) -> (Self, ProcessController, ProcessController) {
+        let (venv_process, venv_controller) = Process::new(
+            String::from("venv_id"),
+            String::from("install_venv_process"),
+        );
+
+        // Create req process
+        let (req_process, req_controller) =
+            Process::new(String::from("req_id"), String::from("install_req_process"));
+
+        (
+            Self {
+                id,
+                uploaded_project_dir,
+                installed_project_dir,
+                project_env_dir,
+                venv_process,
+                req_process,
+            },
+            venv_controller,
+            req_controller,
+        )
     }
 
-    pub async fn check_and_run_installation(&self) -> Result<(), InstallError> {
+    pub async fn check_and_run_installation(&mut self) -> Result<(), InstallError> {
         self.check().await.map_err(StartInstallError::CheckFailed)?;
 
         let uploaded_project_dir = &self.uploaded_project_dir;
@@ -72,70 +90,72 @@ impl LocalProjectInstaller {
                 ))?;
 
         // Create venv process
-        let (venv_process, mut venv_controller) = Process::new(
-            String::from("venv_id"),
-            String::from("install_venv_process"),
-        );
-        let venv_process_cmd = format!("python3 -m venv {}", project_env_dir_str);
+
+        //let venv_process_cmd = format!("python3 -m venv {}", project_env_dir_str);
         let venv_process_args = OsProcessArgs {
-            program,
-            args: vec![first_arg, &venv_process_cmd],
+            program: "python3",
+            args: vec!["-m", "venv", project_env_dir_str],
             current_dir: ".",
             stdout_sender: None,
             stderr_sender: None,
         };
 
-        // Create req process
-        let (req_process, mut req_controller) =
-            Process::new(String::from("req_id"), String::from("install_req_process"));
         let req_process_cmd = format!("{} install -r {}", pip_path_str, requirements_file_path_str);
         let req_process_args = OsProcessArgs {
-            program,
-            args: vec![first_arg, &req_process_cmd],
+            program: pip_path_str,
+            args: vec!["install", "-r", requirements_file_path_str],
             current_dir: ".",
             stdout_sender: None,
             stderr_sender: None,
         };
 
-        tokio::select! {
-            _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {
-                let res = venv_controller.cancel().await;
+        let res = self.venv_process.run(venv_process_args).await;
 
-                //let _ = req_controller.cancel().await;
-                println!("\n\n\n10 seconds passed!\n\n\n");
-                println!("\n\n\nvenv_controller.cancel().await: {:?}\n\n\n", res);
-            }
+        println!("venv_process.run(venv_process_args).await: {:?}", res);
 
-            venv_res = venv_process.run(venv_process_args) => {
-                match venv_res {
-                    Ok(status) => {
-                        match status {
-                            Status::Terminated(TerminationStatus::TerminatedSuccessfully) => {
-                                tokio::select! {
-                                    _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
+        let res = self.req_process.run(req_process_args).await;
 
-                                        let res = req_controller.cancel().await;
-                                        println!("\n\n\nreq_controller.cancel().await: {:?}\n\n\n", res);
-                                    }
+        println!("req_process.run(req_process_args).await: {:?}", res);
 
-                                    _ = req_process.run(req_process_args) => {
+        // let fut = venv_process.run(venv_process_args);
+        // let fut_2 = req_process.run(req_process_args);
 
-                                    }
-                                }
-                            },
-                            _ => {
-                                println!("\n\n\nvenv process failed with status: {:?}\n\n\n", status);
-                            }
-                        }
-                    },
-                    Err(e) => {
-                        println!("\n\n\nvenv process failed with error: {:?}\n\n\n", e);
-                    },
-                }
-            }
+        // tokio::select! {
+        //     _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
+        //         let res = venv_controller.cancel().await;
+        //         println!("\n\n\n5 seconds passed!\n\n\n");
+        //         println!("\n\n\nvenv_controller.cancel().await: {:?}\n\n\n", res);
+        //     }
 
+        //     venv_res = fut => {
+        //         match venv_res {
+        //             Ok(status) => {
+        //                 match status {
+        //                     Status::Terminated(TerminationStatus::TerminatedSuccessfully) => {
+        //                         tokio::select! {
+        //                             _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
 
-        }
+        //                                 let res = req_controller.cancel().await;
+        //                                 println!("\n\n\nreq_controller.cancel().await: {:?}\n\n\n", res);
+        //                             }
+
+        //                             _ = fut_2 => {
+
+        //                             }
+        //                         }
+        //                     },
+        //                     _ => {
+        //                         println!("\n\n\nvenv process failed with status: {:?}\n\n\n", status);
+        //                     }
+        //                 }
+        //             },
+        //             Err(e) => {
+        //                 println!("\n\n\nvenv process failed with error: {:?}\n\n\n", e);
+        //             },
+        //         }
+        //     }
+
+        // }
 
         // TODO: Now we select!
         // 1. wait for stop signal
@@ -497,6 +517,8 @@ mod tests {
     }
 
     mod install_projects {
+        use crate::project_managers::process_2::CancellationError;
+
         use super::*;
 
         #[tokio::test]
@@ -508,12 +530,21 @@ mod tests {
             let installed_project_dir = get_installed_projects_dir().join(&project_id_and_dir);
             let project_env_dir = get_environments_dir().join(&project_id_and_dir);
 
-            let installer = LocalProjectInstaller {
-                id: project_id_and_dir,
+            let (mut installer, mut v_con, mut r_con) = LocalProjectInstaller::new(
+                project_id_and_dir,
                 uploaded_project_dir,
                 installed_project_dir,
                 project_env_dir,
-            };
+            );
+
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                println!("Cancelling after 5 seconds");
+                let res = v_con.cancel().await;
+                println!("Cancelled v_con res: {:?}", res);
+                let res = r_con.cancel().await;
+                println!("Cancelled r_con res: {:?}", res);
+            });
 
             match installer.check_and_run_installation().await {
                 Ok(_) => {
