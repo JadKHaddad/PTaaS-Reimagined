@@ -2,9 +2,6 @@ use crate::project_managers::process_2::{
     OsProcessArgs, Process, ProcessController, ProcessKillAndWaitError, ProcessRunError, Status,
     TerminationStatus,
 };
-use filetime::FileTime;
-use serde::__private::de;
-use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::{io::Error as IoError, path::Path};
@@ -19,8 +16,10 @@ pub struct LocalProjectInstallerController {
 // TODO: some logic for errors
 impl LocalProjectInstallerController {
     pub async fn cancel(&mut self) {
-        let _ = self.venv_controller.cancel().await;
-        let _ = self.req_controller.cancel().await;
+        let res = self.venv_controller.cancel().await;
+        tracing::debug!("venv controller cancel result: {:?}", res);
+        let res = self.req_controller.cancel().await;
+        tracing::debug!("req controller cancel result: {:?}", res);
     }
 }
 
@@ -580,10 +579,10 @@ mod tests {
                 Err(e) => panic!("Unexpected error: {}", e),
             }
 
-            installer
-                .delete_environment_dir_if_exists()
-                .await
-                .expect("Could not delete environment dir");
+            // installer
+            //     .delete_environment_dir_if_exists()
+            //     .await
+            //     .expect("Could not delete environment dir");
 
             let error_file_path = installer.get_process_err_file_path();
             let error_output = fs::read_to_string(error_file_path)

@@ -74,15 +74,14 @@ pub struct ProcessController {
 }
 
 impl ProcessController {
-    /// Blocks until the corresponding `Process` is terminated.
     pub async fn cancel(&mut self) -> Result<Option<ProcessKillAndWaitError>, CancellationError> {
         match self.status_holder.status().await {
             Status::Created => {
-                tracing::debug!(self.given_id, "Process is not running");
-                return Err(CancellationError::NotRunning);
+                tracing::debug!(given_id = self.given_id, "Process is not running");
+                return Err(CancellationError::ProcessNotRunning);
             }
             Status::Terminated(_) => {
-                tracing::debug!(self.given_id, "Process is already terminated");
+                tracing::debug!(given_id = self.given_id, "Process is already terminated");
                 return Err(CancellationError::ProcessTerminated);
             }
             Status::Running => {}
@@ -98,22 +97,28 @@ impl ProcessController {
             .take()
             .ok_or(CancellationError::AlreayTriedToCancel)?;
 
-        tracing::debug!(self.given_id, "Sending cancellation signal to process");
+        tracing::debug!(
+            given_id = self.given_id,
+            "Sending cancellation signal to process"
+        );
         cancel_channel_sender.send(()).map_err(|_| {
             tracing::warn!(
-                self.given_id,
+                given_id = self.given_id,
                 "Failed to send cancellation signal to process"
             );
             CancellationError::ProcessTerminated
         })?;
 
-        tracing::debug!(self.given_id, "Waiting for process to terminate");
+        tracing::debug!(given_id = self.given_id, "Waiting for process to terminate");
         let cencel_result = cancel_channel_receiver.await.map_err(|_| {
-            tracing::warn!(self.given_id, "Failed to wait for process to terminate");
+            tracing::warn!(
+                given_id = self.given_id,
+                "Failed to wait for process to terminate"
+            );
             CancellationError::ProcessTerminated
         })?;
 
-        tracing::debug!(self.given_id, "Process terminated");
+        tracing::debug!(given_id = self.given_id, "Process terminated");
 
         Ok(cencel_result)
     }
@@ -135,7 +140,7 @@ pub struct Process {
 
 impl Drop for Process {
     fn drop(&mut self) {
-        tracing::debug!(self.given_id, "Dropping process");
+        tracing::debug!(given_id = self.given_id, "Dropping process");
     }
 }
 
@@ -212,8 +217,8 @@ impl Process {
         );
 
         tracing::debug!(
-            self.given_id,
-            self.given_name,
+            given_id = self.given_id,
+            given_name = self.given_name,
             "Running process and waiting for signal"
         );
 
@@ -221,8 +226,8 @@ impl Process {
             result = cancel_channel_receiver => {
                 if result.is_ok() {
                     tracing::debug!(
-                        self.given_id,
-                        self.given_name,
+                        given_id=self.given_id,
+                        given_name=self.given_name,
                         "Process was cancelled by the controller"
                     );
 
@@ -242,8 +247,8 @@ impl Process {
                 }
                 else {
                     tracing::debug!(
-                        self.given_id,
-                        self.given_name,
+                        given_id=self.given_id,
+                        given_name=self.given_name,
                         "Process was cancelled by dropping the controller"
                     );
 
@@ -256,8 +261,8 @@ impl Process {
 
             result_exit_status = child.wait() => {
                 tracing::debug!(
-                    self.given_id,
-                    self.given_name,
+                    given_id=self.given_id,
+                    given_name=self.given_name,
                     "Os process terminated"
                 );
 
@@ -267,7 +272,11 @@ impl Process {
             }
         }
 
-        tracing::debug!(self.given_id, self.given_name, "Process finished");
+        tracing::debug!(
+            given_id = self.given_id,
+            given_name = self.given_name,
+            "Process finished"
+        );
 
         let status = self.status_holder.status().await;
 
@@ -448,7 +457,7 @@ pub enum ProcessKillAndWaitError {
 #[derive(ThisError, Debug)]
 pub enum CancellationError {
     #[error("Process is not running")]
-    NotRunning,
+    ProcessNotRunning,
     #[error("Cancellation signal can only be sent once")]
     AlreayTriedToCancel,
     #[error("Corresponding Process terminated already")]
@@ -628,27 +637,6 @@ mod tests {
 
     #[tokio::test]
     #[traced_test]
-    async fn run_numbers_script_and_kill_before_start_and_expect_killed() {
-        let (mut process, mut controller) = create_numbers_process();
-        let args = create_number_process_run_args();
-
-        let task_handler = tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(2)).await;
-            let result = process.run(args).await;
-
-            assert_killed(result)
-        });
-
-        controller
-            .cancel()
-            .await
-            .expect("Error cancelling process.");
-
-        task_handler.await.expect("Error waiting for handler.");
-    }
-
-    #[tokio::test]
-    #[traced_test]
     async fn run_numbers_script_and_kill_after_termination_and_expect_terminated_successfully_and_process_terminated(
     ) {
         let (mut process, mut controller) = create_numbers_process();
@@ -656,10 +644,9 @@ mod tests {
 
         let task_handler = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(5)).await;
-            let result = controller.cancel().await;
-            match result {
+            match controller.cancel().await {
                 Err(CancellationError::ProcessTerminated) => {}
-                _ => panic!("Unexpected result: {:?}", result),
+                result => panic!("Unexpected result: {:?}", result),
             }
         });
 
@@ -681,19 +668,6 @@ mod tests {
 
     #[tokio::test]
     #[traced_test]
-    async fn cancel_a_dropped_process_and_expect_error() {
-        let (mut process, mut controller) = create_numbers_process();
-
-        drop(process);
-
-        match controller.cancel().await {
-            Err(CancellationError::ProcessTerminated) => {}
-            _ => panic!("Unexpected result"),
-        }
-    }
-
-    #[tokio::test]
-    #[traced_test]
     async fn drop_controller_and_expect_killed_by_dropping_controller() {
         let (mut process, _) = create_numbers_process_with_error_code();
         let args = create_number_process_with_error_code_run_args();
@@ -709,7 +683,61 @@ mod tests {
 
     #[tokio::test]
     #[traced_test]
-    async fn cancel_a_process_twice_and_excpect_error() {
+    async fn cancel_process_before_start_and_expect_process_not_running_error() {
+        let (_process, mut controller) = create_numbers_process();
+
+        match controller.cancel().await {
+            Err(CancellationError::ProcessNotRunning) => {}
+            result => panic!("Unexpected result {:?}", result),
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn cancel_process_after_termination_and_expect_process_terminated_error() {
+        let (mut process, mut controller) = create_numbers_process();
+        let args = create_number_process_run_args();
+
+        process.run(args).await.expect("Error running process.");
+
+        match controller.cancel().await {
+            Err(CancellationError::ProcessTerminated) => {}
+            result => panic!("Unexpected result {:?}", result),
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn cancel_a_dropped_process_before_running_and_expect_process_not_running_error() {
+        let (process, mut controller) = create_numbers_process();
+
+        drop(process);
+
+        match controller.cancel().await {
+            Err(CancellationError::ProcessNotRunning) => {}
+            result => panic!("Unexpected result {:?}", result),
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn cancel_a_dropped_process_after_running_and_expect_process_terminated_error() {
+        let (mut process, mut controller) = create_numbers_process();
+        let args = create_number_process_run_args();
+
+        process.run(args).await.expect("Error running process.");
+
+        drop(process);
+
+        match controller.cancel().await {
+            Err(CancellationError::ProcessTerminated) => {}
+            result => panic!("Unexpected result {:?}", result),
+        }
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    async fn cancel_a_process_twice_and_expect_process_terminated_error() {
         let (mut process, mut controller) = create_numbers_process();
         let args = create_number_process_run_args();
 
@@ -721,8 +749,8 @@ mod tests {
                 .expect("Error cancelling process.");
 
             match controller.cancel().await {
-                Err(CancellationError::AlreayTriedToCancel) => {}
-                _ => panic!("Unexpected result"),
+                Err(CancellationError::ProcessTerminated) => {}
+                result => panic!("Unexpected result {:?}", result),
             }
         });
 

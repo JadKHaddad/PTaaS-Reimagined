@@ -334,7 +334,7 @@ impl Drop for Process {
     }
 }
 
-#[cfg(test)]
+// #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
 

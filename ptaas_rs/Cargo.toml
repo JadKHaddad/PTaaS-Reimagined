@@ -17,4 +17,3 @@ thiserror = { version = "1.0.43" }
 serde = { version = "1.0.166", features = ["derive"] }
 serde_json = "1.0.100"
 which = "4.4.0"
-filetime = "0.2.10"
