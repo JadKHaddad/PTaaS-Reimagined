@@ -1,12 +1,25 @@
+use crate::project_managers::process_2::{
+    OsProcessArgs, Process, ProcessController, ProcessKillAndWaitError, ProcessRunError, Status,
+    TerminationStatus,
+};
+use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::{io::Error as IoError, path::Path};
 use thiserror::Error as ThisError;
 use tokio::fs::{self, File, ReadDir};
 
-use crate::project_managers::process_2::{
-    OsProcessArgs, Process, ProcessController, ProcessKillAndWaitError, ProcessRunError, Status,
-    TerminationStatus,
-};
+pub struct LocalProjectInstallerController {
+    venv_controller: ProcessController,
+    req_controller: ProcessController,
+}
+
+// TODO: some logic for errors
+impl LocalProjectInstallerController {
+    pub async fn cancel(&mut self) {
+        let _ = self.venv_controller.cancel().await;
+        let _ = self.req_controller.cancel().await;
+    }
+}
 
 pub struct LocalProjectInstaller {
     id: String,
@@ -34,7 +47,7 @@ impl LocalProjectInstaller {
         uploaded_project_dir: PathBuf,
         installed_project_dir: PathBuf,
         project_env_dir: PathBuf,
-    ) -> (Self, ProcessController, ProcessController) {
+    ) -> (Self, LocalProjectInstallerController) {
         let (venv_process, venv_controller) = Process::new(
             String::from("venv_id"),
             String::from("install_venv_process"),
@@ -53,8 +66,10 @@ impl LocalProjectInstaller {
                 venv_process,
                 req_process,
             },
-            venv_controller,
-            req_controller,
+            LocalProjectInstallerController {
+                venv_controller,
+                req_controller,
+            },
         )
     }
 
@@ -109,62 +124,31 @@ impl LocalProjectInstaller {
             stderr_sender: None,
         };
 
-        let res = self.venv_process.run(venv_process_args).await;
-
-        println!("venv_process.run(venv_process_args).await: {:?}", res);
-
-        let res = self.req_process.run(req_process_args).await;
-
-        println!("req_process.run(req_process_args).await: {:?}", res);
-
-        // let fut = venv_process.run(venv_process_args);
-        // let fut_2 = req_process.run(req_process_args);
-
-        // tokio::select! {
-        //     _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
-        //         let res = venv_controller.cancel().await;
-        //         println!("\n\n\n5 seconds passed!\n\n\n");
-        //         println!("\n\n\nvenv_controller.cancel().await: {:?}\n\n\n", res);
-        //     }
-
-        //     venv_res = fut => {
-        //         match venv_res {
-        //             Ok(status) => {
-        //                 match status {
-        //                     Status::Terminated(TerminationStatus::TerminatedSuccessfully) => {
-        //                         tokio::select! {
-        //                             _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => {
-
-        //                                 let res = req_controller.cancel().await;
-        //                                 println!("\n\n\nreq_controller.cancel().await: {:?}\n\n\n", res);
-        //                             }
-
-        //                             _ = fut_2 => {
-
-        //                             }
-        //                         }
-        //                     },
-        //                     _ => {
-        //                         println!("\n\n\nvenv process failed with status: {:?}\n\n\n", status);
-        //                     }
-        //                 }
-        //             },
-        //             Err(e) => {
-        //                 println!("\n\n\nvenv process failed with error: {:?}\n\n\n", e);
-        //             },
-        //         }
-        //     }
-
-        // }
-
-        // TODO: Now we select!
-        // 1. wait for stop signal
-        // 2. wait for venv process
-        // 2.1. wait for pip install process
-        // we will need a controller and an arc status for the installation process
-        // we will also have to save the state of the installation, so that we know which process to cancel on stop signal
-        // might take ownership of self, or use some options and take them and throw errors if already taken
-        // this struct is now responsible for io operations, not the Process itself, so we can write io to file and then forward it back to the caller as well (Bubbles :D)
+        match self.venv_process.run(venv_process_args).await {
+            Ok(status) => match status {
+                Status::Terminated(TerminationStatus::TerminatedSuccessfully) => {
+                    match self.req_process.run(req_process_args).await {
+                        Ok(status) => match status {
+                            Status::Terminated(TerminationStatus::TerminatedSuccessfully) => {
+                                println!("Installation successful");
+                            }
+                            _ => {
+                                tracing::error!("req process failed with status: {:?}", status);
+                            }
+                        },
+                        Err(e) => {
+                            tracing::error!("req process failed with error: {:?}", e);
+                        }
+                    }
+                }
+                _ => {
+                    tracing::error!("venv process failed with status: {:?}", status);
+                }
+            },
+            Err(e) => {
+                tracing::error!("venv process failed with error: {:?}", e);
+            }
+        }
 
         Ok(())
     }
@@ -530,25 +514,22 @@ mod tests {
             let installed_project_dir = get_installed_projects_dir().join(&project_id_and_dir);
             let project_env_dir = get_environments_dir().join(&project_id_and_dir);
 
-            let (mut installer, mut v_con, mut r_con) = LocalProjectInstaller::new(
+            let (mut installer, mut controller) = LocalProjectInstaller::new(
                 project_id_and_dir,
                 uploaded_project_dir,
                 installed_project_dir,
                 project_env_dir,
             );
 
-            tokio::spawn(async move {
+            let handler = tokio::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                 println!("Cancelling after 5 seconds");
-                let res = v_con.cancel().await;
-                println!("Cancelled v_con res: {:?}", res);
-                let res = r_con.cancel().await;
-                println!("Cancelled r_con res: {:?}", res);
+                controller.cancel().await;
             });
 
             match installer.check_and_run_installation().await {
                 Ok(_) => {
-                    println!("Installation successful");
+                    println!("Installation finished");
                 }
                 Err(e) => panic!("Unexpected error: {}", e),
             }
@@ -567,6 +548,8 @@ mod tests {
             let output_output = fs::read_to_string(output_file_path)
                 .await
                 .expect("Could not read output file");
+
+            handler.await.expect("Could not join handler");
         }
     }
 }

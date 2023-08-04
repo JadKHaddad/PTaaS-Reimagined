@@ -77,6 +77,18 @@ impl ProcessController {
     /// Blocks until the corresponding `Process` is terminated.
     /// Will deadlock if the corresponding `Process` has not been started.
     pub async fn cancel(&mut self) -> Result<Option<ProcessKillAndWaitError>, CancellationError> {
+        match self.status_holder.status().await {
+            Status::Created => {
+                tracing::debug!(given_id = self.given_id, "Process is not running");
+                return Err(CancellationError::NotRunning);
+            }
+            Status::Terminated(_) => {
+                tracing::debug!(given_id = self.given_id, "Process is already terminated");
+                return Err(CancellationError::ProcessTerminated);
+            }
+            Status::Running => {}
+        }
+
         let cancel_channel_sender = self
             .cancel_channel_sender
             .take()
@@ -446,6 +458,8 @@ pub enum ProcessKillAndWaitError {
 
 #[derive(ThisError, Debug)]
 pub enum CancellationError {
+    #[error("Process is not running")]
+    NotRunning,
     #[error("Cancellation signal can only be sent once")]
     AlreayTriedToCancel,
     #[error("Corresponding Process terminated already")]
