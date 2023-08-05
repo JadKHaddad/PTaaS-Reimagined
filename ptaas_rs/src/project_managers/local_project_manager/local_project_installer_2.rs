@@ -7,6 +7,8 @@ use std::time::Duration;
 use std::{io::Error as IoError, path::Path};
 use thiserror::Error as ThisError;
 use tokio::fs::{self, File, ReadDir};
+use tokio::io::AsyncWriteExt;
+use tokio::sync::mpsc;
 
 pub struct LocalProjectInstallerController {
     venv_controller: ProcessController,
@@ -30,17 +32,13 @@ pub struct LocalProjectInstaller {
     project_env_dir: PathBuf,
     venv_process: Process,
     req_process: Process,
+    stdout_sender: Option<mpsc::Sender<String>>,
+    stderr_sender: Option<mpsc::Sender<String>>,
 }
 
 struct FileAndStringPath {
     file: File,
     path: String,
-}
-
-struct OsSpecificArgs {
-    program: &'static str,
-    pip_path: PathBuf,
-    first_arg: &'static str,
 }
 
 impl LocalProjectInstaller {
@@ -49,13 +47,14 @@ impl LocalProjectInstaller {
         uploaded_project_dir: PathBuf,
         installed_project_dir: PathBuf,
         project_env_dir: PathBuf,
+        stdout_sender: Option<mpsc::Sender<String>>,
+        stderr_sender: Option<mpsc::Sender<String>>,
     ) -> (Self, LocalProjectInstallerController) {
         let (venv_process, venv_controller) = Process::new(
             String::from("venv_id"),
             String::from("install_venv_process"),
         );
 
-        // Create req process
         let (req_process, req_controller) =
             Process::new(String::from("req_id"), String::from("install_req_process"));
 
@@ -67,6 +66,8 @@ impl LocalProjectInstaller {
                 project_env_dir,
                 venv_process,
                 req_process,
+                stdout_sender,
+                stderr_sender,
             },
             LocalProjectInstallerController {
                 venv_controller,
@@ -93,11 +94,7 @@ impl LocalProjectInstaller {
             StartInstallError::FailedToConvertPathBufToString(requirements_file_path.clone()),
         )?;
 
-        let OsSpecificArgs {
-            program,
-            pip_path,
-            first_arg,
-        } = self.create_os_specific_args();
+        let pip_path = self.create_os_specific_pip_path();
 
         let pip_path_str =
             pip_path
@@ -106,25 +103,89 @@ impl LocalProjectInstaller {
                     pip_path.clone(),
                 ))?;
 
-        // Create venv process
+        // create files and channels
+        let venv_stdout_file_path = uploaded_project_dir.join("venv_stdout.txt");
+        let mut venv_stdout_file = File::create(&venv_stdout_file_path).await.map_err(|e| {
+            StartInstallError::VenvStartError(SubStartInstallError::CreateFileError(
+                CreateFileError::CouldNotCreateFile(e, venv_stdout_file_path),
+            ))
+        })?;
 
-        //let venv_process_cmd = format!("python3 -m venv {}", project_env_dir_str);
+        let venv_stderr_file_path = uploaded_project_dir.join("venv_stderr.txt");
+        let mut venv_stderr_file = File::create(&venv_stderr_file_path).await.map_err(|e| {
+            StartInstallError::VenvStartError(SubStartInstallError::CreateFileError(
+                CreateFileError::CouldNotCreateFile(e, venv_stderr_file_path),
+            ))
+        })?;
+
+        let req_stdout_file_path = uploaded_project_dir.join("req_stdout.txt");
+        let mut req_stdout_file = File::create(&req_stdout_file_path).await.map_err(|e| {
+            StartInstallError::RequirementsInstallError(SubStartInstallError::CreateFileError(
+                CreateFileError::CouldNotCreateFile(e, req_stdout_file_path),
+            ))
+        })?;
+
+        let req_stderr_file_path = uploaded_project_dir.join("req_stderr.txt");
+        let mut req_stderr_file = File::create(&req_stderr_file_path).await.map_err(|e| {
+            StartInstallError::RequirementsInstallError(SubStartInstallError::CreateFileError(
+                CreateFileError::CouldNotCreateFile(e, req_stderr_file_path),
+            ))
+        })?;
+
+        let (venv_stdout_sender, mut venv_stdout_receiver) = mpsc::channel::<String>(100);
+        let (venv_stderr_sender, mut venv_stderr_receiver) = mpsc::channel::<String>(100);
+
+        let (req_stdout_sender, mut req_stdout_receiver) = mpsc::channel::<String>(100);
+        let (req_stderr_sender, mut req_stderr_receiver) = mpsc::channel::<String>(100);
+
+        // Create processes args
         let venv_process_args = OsProcessArgs {
             program: "python3",
             args: vec!["-m", "venv", project_env_dir_str],
             current_dir: ".",
-            stdout_sender: None,
-            stderr_sender: None,
+            stdout_sender: Some(venv_stdout_sender),
+            stderr_sender: Some(venv_stderr_sender),
         };
 
-        let req_process_cmd = format!("{} install -r {}", pip_path_str, requirements_file_path_str);
         let req_process_args = OsProcessArgs {
             program: pip_path_str,
             args: vec!["install", "-r", requirements_file_path_str],
             current_dir: ".",
-            stdout_sender: None,
-            stderr_sender: None,
+            stdout_sender: Some(req_stdout_sender),
+            stderr_sender: Some(req_stderr_sender),
         };
+
+        // do some channel magic for venv
+
+        let stdout_sender = self.stdout_sender.clone();
+        tokio::spawn(async move {
+            while let Some(line) = venv_stdout_receiver.recv().await {
+                if let Err(err) = venv_stdout_file.write_all(line.as_bytes()).await {
+                    tracing::error!(%err, "Failed to write to file");
+                    break;
+                }
+                if let Some(sender) = &stdout_sender {
+                    // we don't care if the send fails
+                    let _ = sender.send(line).await;
+                }
+            }
+        });
+
+        let stderr_sender = self.stderr_sender.clone();
+        tokio::spawn(async move {
+            while let Some(line) = venv_stderr_receiver.recv().await {
+                if let Err(err) = venv_stderr_file.write_all(line.as_bytes()).await {
+                    tracing::error!(%err, "Failed to write to file");
+                    break;
+                }
+                if let Some(sender) = &stderr_sender {
+                    // we don't care if the send fails
+                    let _ = sender.send(line).await;
+                }
+            }
+        });
+
+        // run venv and if it succeeds, do channel business for req and run it
 
         match self.venv_process.run(venv_process_args).await {
             Ok(status) => match status {
@@ -273,25 +334,14 @@ impl LocalProjectInstaller {
         Ok(())
     }
 
-    fn create_os_specific_args(&self) -> OsSpecificArgs {
-        let (program, pip_path, first_arg) = if cfg!(target_os = "windows") {
-            let program = "cmd";
-            let pip_path = self.project_env_dir.join("Scripts").join("pip3");
-            let first_first_arg = "/C";
-
-            (program, pip_path, first_first_arg)
+    fn create_os_specific_pip_path(&self) -> PathBuf {
+        if cfg!(target_os = "windows") {
+            self.project_env_dir.join("Scripts").join("pip3")
+        } else if cfg!(target_os = "linux") {
+            self.project_env_dir.join("bin").join("pip3")
         } else {
-            let program = "bash";
-            let pip_path = self.project_env_dir.join("bin").join("pip3");
-            let first_first_arg = "-c";
-
-            (program, pip_path, first_first_arg)
-        };
-
-        OsSpecificArgs {
-            program,
-            pip_path,
-            first_arg,
+            tracing::warn!("Unknown OS, assuming linux");
+            self.project_env_dir.join("bin").join("pip3")
         }
     }
 }
@@ -371,6 +421,16 @@ pub enum InstallError {
 }
 
 #[derive(ThisError, Debug)]
+pub enum SubStartInstallError {
+    #[error("{0}")]
+    CreateFileError(
+        #[from]
+        #[source]
+        CreateFileError,
+    ),
+}
+
+#[derive(ThisError, Debug)]
 pub enum StartInstallError {
     #[error("Could not convert path buf to string: {0}")]
     FailedToConvertPathBufToString(PathBuf),
@@ -380,28 +440,38 @@ pub enum StartInstallError {
         #[source]
         ProjectCheckError,
     ),
-    #[error("Could not create process: {0}")]
-    ProcessCreateError(
-        #[from]
-        #[source]
-        ProcessRunError,
-    ),
-    #[error("{0}")]
-    ErrorThatTriggersCleanUp(
-        #[from]
-        #[source]
-        ErrorThatTriggersCleanUp,
-    ),
+    #[error("Venv installation can not be started: {0}")]
+    VenvStartError(#[source] SubStartInstallError),
+    #[error("Requirements installation can not be started: {0}")]
+    RequirementsInstallError(#[source] SubStartInstallError),
+    // #[error("Could not create process: {0}")]
+    // ProcessCreateError(
+    //     #[from]
+    //     #[source]
+    //     ProcessRunError,
+    // ),
+    // #[error("Could not create file: {0}")]
+    // CreateFileError(
+    //     #[from]
+    //     #[source]
+    //     IoError,
+    // ),
+    // #[error("{0}")]
+    // ErrorThatTriggersCleanUp(
+    //     #[from]
+    //     #[source]
+    //     ErrorThatTriggersCleanUp,
+    // ),
 }
 
 #[derive(ThisError, Debug)]
 pub enum ErrorThatTriggersCleanUp {
-    #[error("Could not create file: {0}")]
-    CreateFileError(
-        #[from]
-        #[source]
-        CreateFileError,
-    ),
+    // #[error("Could not create file: {0}")]
+    // CreateFileError(
+    //     #[from]
+    //     #[source]
+    //     CreateFileError,
+    // ),
 }
 
 #[derive(ThisError, Debug)]
@@ -460,12 +530,8 @@ impl From<DirExistsAndNotEmptyError> for LocustDirError {
 
 #[derive(ThisError, Debug)]
 pub enum CreateFileError {
-    #[error("Could not create file: {0}")]
-    CouldNotCreateFile(
-        #[source]
-        #[from]
-        IoError,
-    ),
+    #[error("Could not create file: {0} {1}")]
+    CouldNotCreateFile(#[source] IoError, PathBuf),
     #[error("Could not convert path buf to string: {0}")]
     FailedToConvertPathBufToString(PathBuf),
 }
@@ -564,6 +630,8 @@ mod tests {
                 uploaded_project_dir,
                 installed_project_dir,
                 project_env_dir,
+                None,
+                None,
             );
 
             let handler = tokio::spawn(async move {
