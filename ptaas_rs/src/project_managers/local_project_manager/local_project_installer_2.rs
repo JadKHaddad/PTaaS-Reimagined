@@ -1,6 +1,5 @@
 use crate::project_managers::process_2::{
-    OsProcessArgs, Process, ProcessController, ProcessKillAndWaitError, ProcessRunError, Status,
-    TerminationStatus,
+    OsProcessArgs, Process, ProcessController, ProcessKillAndWaitError, Status, TerminationStatus,
 };
 use std::path::PathBuf;
 use std::time::Duration;
@@ -158,29 +157,43 @@ impl LocalProjectInstaller {
         // do some channel magic for venv
 
         let stdout_sender = self.stdout_sender.clone();
+        let warn_span_venv_stout = tracing::warn_span!(
+            "LocalProjectInstaller::VirtualEnvStdout",
+            id = self.id.clone()
+        );
         tokio::spawn(async move {
+            let _span_guard = warn_span_venv_stout.enter();
+
             while let Some(line) = venv_stdout_receiver.recv().await {
                 if let Err(err) = venv_stdout_file.write_all(line.as_bytes()).await {
                     tracing::error!(%err, "Failed to write to file");
                     break;
                 }
                 if let Some(sender) = &stdout_sender {
-                    // we don't care if the send fails
-                    let _ = sender.send(line).await;
+                    if let Err(err) = sender.send(line).await {
+                        tracing::error!(%err, "Failed to send line to sender");
+                    }
                 }
             }
         });
 
         let stderr_sender = self.stderr_sender.clone();
+        let warn_span_venv_stderr = tracing::warn_span!(
+            "LocalProjectInstaller::VirtualEnvStderr",
+            id = self.id.clone()
+        );
         tokio::spawn(async move {
+            let _span_guard = warn_span_venv_stderr.enter();
+
             while let Some(line) = venv_stderr_receiver.recv().await {
                 if let Err(err) = venv_stderr_file.write_all(line.as_bytes()).await {
                     tracing::error!(%err, "Failed to write to file");
                     break;
                 }
                 if let Some(sender) = &stderr_sender {
-                    // we don't care if the send fails
-                    let _ = sender.send(line).await;
+                    if let Err(err) = sender.send(line).await {
+                        tracing::error!(%err, "Failed to send line to sender");
+                    }
                 }
             }
         });

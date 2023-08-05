@@ -12,6 +12,7 @@ use tokio::{
     process::{Child, ChildStderr, ChildStdout, Command},
     sync::{mpsc, oneshot, RwLock},
 };
+use tracing::{debug_span, warn_span};
 
 #[derive(Debug, Clone)]
 pub enum Status {
@@ -75,13 +76,19 @@ pub struct ProcessController {
 
 impl ProcessController {
     pub async fn cancel(&mut self) -> Result<Option<ProcessKillAndWaitError>, CancellationError> {
+        let debug_span = debug_span!("ProcessController::cancel", given_id = self.given_id);
+        let warn_span = warn_span!("ProcessController::cancel", given_id = self.given_id);
+
+        let _debug_span_guard = debug_span.enter();
+        let _warn_span_guard = warn_span.enter();
+
         match self.status_holder.status().await {
             Status::Created => {
-                tracing::debug!(given_id = self.given_id, "Process is not running");
+                tracing::debug!("Process is not running");
                 return Err(CancellationError::ProcessNotRunning);
             }
             Status::Terminated(_) => {
-                tracing::debug!(given_id = self.given_id, "Process is already terminated");
+                tracing::debug!("Process is already terminated");
                 return Err(CancellationError::ProcessTerminated);
             }
             Status::Running => {}
@@ -97,28 +104,19 @@ impl ProcessController {
             .take()
             .ok_or(CancellationError::AlreayTriedToCancel)?;
 
-        tracing::debug!(
-            given_id = self.given_id,
-            "Sending cancellation signal to process"
-        );
+        tracing::debug!("Sending cancellation signal to process");
         cancel_channel_sender.send(()).map_err(|_| {
-            tracing::warn!(
-                given_id = self.given_id,
-                "Failed to send cancellation signal to process"
-            );
+            tracing::warn!("Failed to send cancellation signal to process");
             CancellationError::ProcessTerminated
         })?;
 
-        tracing::debug!(given_id = self.given_id, "Waiting for process to terminate");
+        tracing::debug!("Waiting for process to terminate");
         let cencel_result = cancel_channel_receiver.await.map_err(|_| {
-            tracing::warn!(
-                given_id = self.given_id,
-                "Failed to wait for process to terminate"
-            );
+            tracing::warn!("Failed to wait for process to terminate");
             CancellationError::ProcessTerminated
         })?;
 
-        tracing::debug!(given_id = self.given_id, "Process terminated");
+        tracing::debug!("Process terminated");
 
         Ok(cencel_result)
     }
@@ -140,7 +138,10 @@ pub struct Process {
 
 impl Drop for Process {
     fn drop(&mut self) {
-        tracing::debug!(given_id = self.given_id, "Dropping process");
+        let debug_span = debug_span!("Process::drop", given_id = self.given_id);
+        let _span_guard = debug_span.enter();
+
+        tracing::debug!("Dropping process");
     }
 }
 
@@ -180,6 +181,13 @@ impl Process {
         S: AsRef<OsStr>,
         P: AsRef<Path>,
     {
+        let debug_span = debug_span!(
+            "Process::run",
+            given_id = self.given_id,
+            given_name = self.given_name
+        );
+        let _span_guard = debug_span.enter();
+
         let cancel_channel_sender = self
             .cancel_status_channel_sender
             .take()
@@ -216,19 +224,13 @@ impl Process {
             self.given_name.clone(),
         );
 
-        tracing::debug!(
-            given_id = self.given_id,
-            given_name = self.given_name,
-            "Running process and waiting for signal"
-        );
+        tracing::debug!("Running Os process and waiting for signal");
 
         tokio::select! {
             result = cancel_channel_receiver => {
                 if result.is_ok() {
                     tracing::debug!(
-                        given_id=self.given_id,
-                        given_name=self.given_name,
-                        "Process was cancelled by the controller"
+                        "Os process was cancelled by the controller"
                     );
 
                     // The process was explicitly cancelled by the controller
@@ -247,9 +249,7 @@ impl Process {
                 }
                 else {
                     tracing::debug!(
-                        given_id=self.given_id,
-                        given_name=self.given_name,
-                        "Process was cancelled by dropping the controller"
+                        "Os process was cancelled by dropping the controller"
                     );
 
                     // The controller was dropped, wich means we can't send the cancelation error, so we return it here
@@ -261,9 +261,7 @@ impl Process {
 
             result_exit_status = child.wait() => {
                 tracing::debug!(
-                    given_id=self.given_id,
-                    given_name=self.given_name,
-                    "Os process terminated"
+                    "Os process terminated by itself"
                 );
 
                 let exit_status = result_exit_status.map_err(ProcessRunError::CouldNotWaitForOsProcess)?;
@@ -272,11 +270,7 @@ impl Process {
             }
         }
 
-        tracing::debug!(
-            given_id = self.given_id,
-            given_name = self.given_name,
-            "Process finished"
-        );
+        tracing::debug!("Process finished");
 
         let status = self.status_holder.status().await;
 
@@ -415,13 +409,21 @@ impl Process {
         let mut lines = reader.lines();
 
         tokio::spawn(async move {
-            tracing::debug!(given_id, io_name, given_name, "Starting to forward IO");
+            let debug_span = tracing::debug_span!(
+                "Process::Forwarding_IO",
+                given_id = given_id,
+                io_name = io_name,
+                given_name = given_name
+            );
+            let _span_guard = debug_span.enter();
+
+            tracing::debug!("Starting to forward IO");
             while let Ok(Some(line)) = lines.next_line().await {
                 if sender.send(line).await.is_err() {
                     break;
                 }
             }
-            tracing::debug!(given_id, io_name, given_name, "Finished forwarding IO");
+            tracing::debug!("Finished forwarding IO");
         });
     }
 }
