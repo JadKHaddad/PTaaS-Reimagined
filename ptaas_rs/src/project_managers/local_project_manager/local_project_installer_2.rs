@@ -211,20 +211,20 @@ impl LocalProjectInstaller {
                     _ => {
                         // any other termination status will trigger a clean up
                         // clean up
-                        // return VenvInstallError SubInstallError Killed or TerminatedWithError
+                        // return ErrorThatTriggersCleanUp VenvInstallError SubInstallError Killed or TerminatedWithError
                         todo!();
                     }
                 },
                 _ => {
                     // any other status can't be handled (Created, Running)
                     // trace an error and return with unexpected status error
-                    // return VenvInstallError SubInstallError UnexpectedStatus
+                    // return ErrorThatTriggersCleanUp VenvInstallError SubInstallError UnexpectedStatus
                     todo!();
                 }
             },
             Err(err) => {
                 // do clean up and return error
-                // return VenvInstallError SubInstallError RunError
+                // return ErrorThatTriggersCleanUp VenvInstallError SubInstallError RunError
                 todo!();
             }
         }
@@ -476,10 +476,12 @@ pub enum StartInstallError {
     VenvStartError(#[source] SubStartInstallError),
     #[error("Requirements installation can not be started: {0}")]
     RequirementsStartError(#[source] SubStartInstallError),
-    #[error("Virtual environment installation failed: {0}")]
-    VenvInstallError(#[source] SubInstallError),
-    #[error("Requirements installation failed: {0}")]
-    RequirementsInstallError(#[source] SubInstallError),
+    #[error("{0}")]
+    ErrorThatTriggersCleanUp(
+        #[from]
+        #[source]
+        ErrorThatTriggersCleanUp,
+    ),
     // #[error("Could not create process: {0}")]
     // ProcessCreateError(
     //     #[from]
@@ -492,32 +494,18 @@ pub enum StartInstallError {
     //     #[source]
     //     IoError,
     // ),
-    // #[error("{0}")]
-    // ErrorThatTriggersCleanUp(
-    //     #[from]
-    //     #[source]
-    //     ErrorThatTriggersCleanUp,
-    // ),
 }
 
 #[derive(ThisError, Debug)]
 pub enum ErrorThatTriggersCleanUp {
-    // #[error("Could not create file: {0}")]
-    // CreateFileError(
-    //     #[from]
-    //     #[source]
-    //     CreateFileError,
-    // ),
+    #[error("Virtual environment installation failed: {0}")]
+    VenvInstallError(#[source] SubInstallError),
+    #[error("Requirements installation failed: {0}")]
+    RequirementsInstallError(#[source] SubInstallError),
 }
 
 #[derive(ThisError, Debug)]
 pub enum CleanUpError {
-    #[error("Could not kill process: {0}")]
-    CouldNotKillProcess(
-        #[source]
-        #[from]
-        ProcessKillAndWaitError,
-    ),
     #[error("Could not delete environment dir: {0}")]
     CouldNotDeleteEnvironment(#[source] DeleteEnvironmentDirError),
 }
