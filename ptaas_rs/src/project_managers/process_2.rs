@@ -23,11 +23,16 @@ pub enum Status {
 
 #[derive(Debug, Clone)]
 pub enum TerminationStatus {
-    /// Explicitly killed by this library.
-    Killed,
-    KilledByDroppingController,
+    Killed(KilledTerminationStatus),
     TerminatedSuccessfully,
     TerminatedWithError(TerminationWithErrorStatus),
+}
+
+#[derive(Debug, Clone)]
+pub enum KilledTerminationStatus {
+    /// Explicitly killed by this library.
+    KilledByCancellationSignal,
+    KilledByDroppingController,
 }
 
 #[derive(Debug, Clone)]
@@ -84,7 +89,7 @@ impl ProcessController {
 
         match self.status_holder.status().await {
             Status::Created => {
-                tracing::debug!("Process is not running");
+                tracing::debug!("Process has not started yet");
                 return Err(CancellationError::ProcessNotRunning);
             }
             Status::Terminated(_) => {
@@ -349,10 +354,14 @@ impl Process {
             Some(code) => match code {
                 1 if cfg!(target_os = "windows") && child_killed_successfuly => {
                     if controller_dropped {
-                        return Status::Terminated(TerminationStatus::KilledByDroppingController);
+                        return Status::Terminated(TerminationStatus::Killed(
+                            KilledTerminationStatus::KilledByDroppingController,
+                        ));
                     }
 
-                    Status::Terminated(TerminationStatus::Killed)
+                    Status::Terminated(TerminationStatus::Killed(
+                        KilledTerminationStatus::KilledByCancellationSignal,
+                    ))
                 }
                 _ => Status::Terminated(TerminationStatus::TerminatedWithError(
                     TerminationWithErrorStatus::TerminatedWithErrorCode(code),
@@ -360,10 +369,14 @@ impl Process {
             },
             None if cfg!(target_os = "linux") && child_killed_successfuly => {
                 if controller_dropped {
-                    return Status::Terminated(TerminationStatus::KilledByDroppingController);
+                    return Status::Terminated(TerminationStatus::Killed(
+                        KilledTerminationStatus::KilledByDroppingController,
+                    ));
                 }
 
-                Status::Terminated(TerminationStatus::Killed)
+                Status::Terminated(TerminationStatus::Killed(
+                    KilledTerminationStatus::KilledByCancellationSignal,
+                ))
             }
             _ => Status::Terminated(TerminationStatus::TerminatedWithError(
                 TerminationWithErrorStatus::TerminatedWithUnknownErrorCode,
@@ -425,6 +438,10 @@ impl Process {
             }
             tracing::debug!("Finished forwarding IO");
         });
+    }
+
+    pub async fn status(&self) -> Status {
+        self.status_holder.status().await
     }
 }
 
@@ -591,7 +608,9 @@ mod tests {
 
     fn assert_killed(result: Result<Status, ProcessRunError>) {
         match result {
-            Ok(Status::Terminated(TerminationStatus::Killed)) => {}
+            Ok(Status::Terminated(TerminationStatus::Killed(
+                KilledTerminationStatus::KilledByCancellationSignal,
+            ))) => {}
             Err(e) => panic!("Unexpected error: {:?}", e),
             _ => panic!("Unexpected result: {:?}", result),
         }
@@ -677,7 +696,9 @@ mod tests {
         let result = process.run(args).await;
 
         match result {
-            Ok(Status::Terminated(TerminationStatus::KilledByDroppingController)) => {}
+            Ok(Status::Terminated(TerminationStatus::Killed(
+                KilledTerminationStatus::KilledByDroppingController,
+            ))) => {}
             Err(e) => panic!("Unexpected error: {:?}", e),
             _ => panic!("Unexpected result: {:?}", result),
         }

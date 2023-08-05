@@ -1,5 +1,6 @@
 use crate::project_managers::process_2::{
-    OsProcessArgs, Process, ProcessController, ProcessKillAndWaitError, Status, TerminationStatus,
+    KilledTerminationStatus, OsProcessArgs, Process, ProcessController, ProcessKillAndWaitError,
+    ProcessRunError, Status, TerminationStatus, TerminationWithErrorStatus,
 };
 use std::path::PathBuf;
 use std::time::Duration;
@@ -119,14 +120,14 @@ impl LocalProjectInstaller {
 
         let req_stdout_file_path = uploaded_project_dir.join("req_stdout.txt");
         let mut req_stdout_file = File::create(&req_stdout_file_path).await.map_err(|e| {
-            StartInstallError::RequirementsInstallError(SubStartInstallError::CreateFileError(
+            StartInstallError::RequirementsStartError(SubStartInstallError::CreateFileError(
                 CreateFileError::CouldNotCreateFile(e, req_stdout_file_path),
             ))
         })?;
 
         let req_stderr_file_path = uploaded_project_dir.join("req_stderr.txt");
         let mut req_stderr_file = File::create(&req_stderr_file_path).await.map_err(|e| {
-            StartInstallError::RequirementsInstallError(SubStartInstallError::CreateFileError(
+            StartInstallError::RequirementsStartError(SubStartInstallError::CreateFileError(
                 CreateFileError::CouldNotCreateFile(e, req_stderr_file_path),
             ))
         })?;
@@ -199,30 +200,32 @@ impl LocalProjectInstaller {
         });
 
         // run venv and if it succeeds, do channel business for req and run it
+        let venv_result = self.venv_process.run(venv_process_args).await;
 
-        match self.venv_process.run(venv_process_args).await {
+        match venv_result {
             Ok(status) => match status {
-                Status::Terminated(TerminationStatus::TerminatedSuccessfully) => {
-                    match self.req_process.run(req_process_args).await {
-                        Ok(status) => match status {
-                            Status::Terminated(TerminationStatus::TerminatedSuccessfully) => {
-                                println!("Installation successful");
-                            }
-                            _ => {
-                                tracing::error!("req process failed with status: {:?}", status);
-                            }
-                        },
-                        Err(e) => {
-                            tracing::error!("req process failed with error: {:?}", e);
-                        }
+                Status::Terminated(term_status) => match term_status {
+                    TerminationStatus::TerminatedSuccessfully => {
+                        // run req
                     }
-                }
+                    _ => {
+                        // any other termination status will trigger a clean up
+                        // clean up
+                        // return VenvInstallError SubInstallError Killed or TerminatedWithError
+                        todo!();
+                    }
+                },
                 _ => {
-                    tracing::error!("venv process failed with status: {:?}", status);
+                    // any other status can't be handled (Created, Running)
+                    // trace an error and return with unexpected status error
+                    // return VenvInstallError SubInstallError UnexpectedStatus
+                    todo!();
                 }
             },
-            Err(e) => {
-                tracing::error!("venv process failed with error: {:?}", e);
+            Err(err) => {
+                // do clean up and return error
+                // return VenvInstallError SubInstallError RunError
+                todo!();
             }
         }
 
@@ -435,12 +438,28 @@ pub enum InstallError {
 
 #[derive(ThisError, Debug)]
 pub enum SubStartInstallError {
-    #[error("{0}")]
+    #[error("Error creating file: {0}")]
     CreateFileError(
         #[from]
         #[source]
         CreateFileError,
     ),
+}
+
+#[derive(ThisError, Debug)]
+pub enum SubInstallError {
+    #[error("Process failed to start: {0}")]
+    RunError(
+        #[from]
+        #[source]
+        ProcessRunError,
+    ),
+    #[error("Process killed")]
+    Killed(KilledTerminationStatus),
+    #[error("Process terminated with error")]
+    TerminatedWithError(TerminationWithErrorStatus),
+    #[error("Process had unexpected status")]
+    UnexpectedStatus(Status),
 }
 
 #[derive(ThisError, Debug)]
@@ -453,10 +472,14 @@ pub enum StartInstallError {
         #[source]
         ProjectCheckError,
     ),
-    #[error("Venv installation can not be started: {0}")]
+    #[error("Virtual environment installation can not be started: {0}")]
     VenvStartError(#[source] SubStartInstallError),
     #[error("Requirements installation can not be started: {0}")]
-    RequirementsInstallError(#[source] SubStartInstallError),
+    RequirementsStartError(#[source] SubStartInstallError),
+    #[error("Virtual environment installation failed: {0}")]
+    VenvInstallError(#[source] SubInstallError),
+    #[error("Requirements installation failed: {0}")]
+    RequirementsInstallError(#[source] SubInstallError),
     // #[error("Could not create process: {0}")]
     // ProcessCreateError(
     //     #[from]
