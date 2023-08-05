@@ -271,14 +271,14 @@ impl LocalProjectInstaller {
 
         let _ = Self::check_dir_exists_and_not_empty(uploaded_project_dir)
             .await
-            .map_err(|err| ProjectCheckError::ProjectDirError(err.into()))?;
+            .map_err(|err| ProjectCheckError::ProjectDir(err.into()))?;
 
         self.check_requirements_txt_exists_and_locust_in_requirements_txt()
             .await?;
 
         self.check_locust_dir_exists_and_not_empty_and_contains_python_scripts()
             .await
-            .map_err(ProjectCheckError::LocustDirError)?;
+            .map_err(ProjectCheckError::LocustDir)?;
 
         Ok(())
     }
@@ -365,19 +365,19 @@ impl LocalProjectInstaller {
 #[derive(ThisError, Debug)]
 pub enum ProjectCheckError {
     #[error("Project dir error: {0}")]
-    ProjectDirError(
+    ProjectDir(
         #[source]
         #[from]
         ProjectDirError,
     ),
     #[error("Requirements error: {0}")]
-    RequirementsError(
+    Requirements(
         #[source]
         #[from]
         RequirementsError,
     ),
     #[error("Locust dir error: {0}")]
-    LocustDirError(
+    LocustDir(
         #[source]
         #[from]
         LocustDirError,
