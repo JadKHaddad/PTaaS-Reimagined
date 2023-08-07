@@ -10,6 +10,38 @@ use tokio::fs::{self, File, ReadDir};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 
+macro_rules! generate_process_run_result {
+    ($process_run_result:ident, $error_that_triggers_cleanup_variant:ident) => {
+        match $process_run_result {
+            Ok(status) => match status {
+                Status::Terminated(term_status) => match term_status {
+                    TerminationStatus::TerminatedSuccessfully => Ok(()),
+                    TerminationStatus::Killed(killed_term_status) => Err(
+                        ErrorThatTriggersCleanUp::$error_that_triggers_cleanup_variant(
+                            SubInstallError::Killed(killed_term_status),
+                        ),
+                    ),
+                    TerminationStatus::TerminatedWithError(term_with_error_status) => Err(
+                        ErrorThatTriggersCleanUp::$error_that_triggers_cleanup_variant(
+                            SubInstallError::TerminatedWithError(term_with_error_status),
+                        ),
+                    ),
+                },
+                _ => Err(
+                    ErrorThatTriggersCleanUp::$error_that_triggers_cleanup_variant(
+                        SubInstallError::UnexpectedStatus(status),
+                    ),
+                ),
+            },
+            Err(error) => Err(
+                ErrorThatTriggersCleanUp::$error_that_triggers_cleanup_variant(
+                    SubInstallError::RunError(error),
+                ),
+            ),
+        }
+    };
+}
+
 pub struct LocalProjectInstallerController {
     venv_controller: ProcessController,
     req_controller: ProcessController,
@@ -199,31 +231,11 @@ impl LocalProjectInstaller {
             }
         });
 
-        let res = match self.venv_process.run(venv_process_args).await {
-            Ok(status) => match status {
-                Status::Terminated(term_status) => match term_status {
-                    TerminationStatus::TerminatedSuccessfully => Ok(()),
-                    TerminationStatus::Killed(killed_term_status) => {
-                        Err(ErrorThatTriggersCleanUp::VenvInstallError(
-                            SubInstallError::Killed(killed_term_status),
-                        ))
-                    }
-                    TerminationStatus::TerminatedWithError(term_with_error_status) => {
-                        Err(ErrorThatTriggersCleanUp::VenvInstallError(
-                            SubInstallError::TerminatedWithError(term_with_error_status),
-                        ))
-                    }
-                },
-                _ => Err(ErrorThatTriggersCleanUp::VenvInstallError(
-                    SubInstallError::UnexpectedStatus(status),
-                )),
-            },
-            Err(error) => Err(ErrorThatTriggersCleanUp::VenvInstallError(
-                SubInstallError::RunError(error),
-            )),
-        };
+        let venv_process_result = self.venv_process.run(venv_process_args).await;
+        let venv_process_run_result =
+            generate_process_run_result!(venv_process_result, VenvInstallError);
 
-        if let Err(error) = res {
+        if let Err(error) = venv_process_run_result {
             return Err(self.clean_up_on_error_and_return_error(error).await);
         }
 
@@ -271,31 +283,11 @@ impl LocalProjectInstaller {
             }
         });
 
-        let res = match self.req_process.run(req_process_args).await {
-            Ok(status) => match status {
-                Status::Terminated(term_status) => match term_status {
-                    TerminationStatus::TerminatedSuccessfully => Ok(()),
-                    TerminationStatus::Killed(killed_term_status) => {
-                        Err(ErrorThatTriggersCleanUp::RequirementsInstallError(
-                            SubInstallError::Killed(killed_term_status),
-                        ))
-                    }
-                    TerminationStatus::TerminatedWithError(term_with_error_status) => {
-                        Err(ErrorThatTriggersCleanUp::RequirementsInstallError(
-                            SubInstallError::TerminatedWithError(term_with_error_status),
-                        ))
-                    }
-                },
-                _ => Err(ErrorThatTriggersCleanUp::RequirementsInstallError(
-                    SubInstallError::UnexpectedStatus(status),
-                )),
-            },
-            Err(error) => Err(ErrorThatTriggersCleanUp::RequirementsInstallError(
-                SubInstallError::RunError(error),
-            )),
-        };
+        let req_process_result = self.req_process.run(req_process_args).await;
+        let req_process_run_result =
+            generate_process_run_result!(req_process_result, RequirementsInstallError);
 
-        if let Err(error) = res {
+        if let Err(error) = req_process_run_result {
             return Err(self.clean_up_on_error_and_return_error(error).await);
         }
 
