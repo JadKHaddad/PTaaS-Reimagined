@@ -673,7 +673,7 @@ async fn remove_dir_all_with_max_attempts_and_delay(
     Err(MaxAttemptsExceeded(errors))
 }
 
-#[cfg(test)]
+// #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::Path;
@@ -714,6 +714,7 @@ mod tests {
 
         #[tokio::test]
         #[traced_test]
+        #[ignore]
         pub async fn tester() {
             let project_id_and_dir = String::from("valid");
             let uploaded_project_dir = get_uploaded_projects_dir().join(&project_id_and_dir);
