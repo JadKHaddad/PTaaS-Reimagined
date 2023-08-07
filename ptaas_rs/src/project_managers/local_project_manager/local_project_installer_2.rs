@@ -199,34 +199,104 @@ impl LocalProjectInstaller {
             }
         });
 
-        // run venv and if it succeeds, do channel business for req and run it
-        let venv_result = self.venv_process.run(venv_process_args).await;
-
-        match venv_result {
+        let res = match self.venv_process.run(venv_process_args).await {
             Ok(status) => match status {
                 Status::Terminated(term_status) => match term_status {
-                    TerminationStatus::TerminatedSuccessfully => {
-                        // run req
+                    TerminationStatus::TerminatedSuccessfully => Ok(()),
+                    TerminationStatus::Killed(killed_term_status) => {
+                        Err(ErrorThatTriggersCleanUp::VenvInstallError(
+                            SubInstallError::Killed(killed_term_status),
+                        ))
                     }
-                    _ => {
-                        // any other termination status will trigger a clean up
-                        // clean up
-                        // return ErrorThatTriggersCleanUp VenvInstallError SubInstallError Killed or TerminatedWithError
-                        todo!();
+                    TerminationStatus::TerminatedWithError(term_with_error_status) => {
+                        Err(ErrorThatTriggersCleanUp::VenvInstallError(
+                            SubInstallError::TerminatedWithError(term_with_error_status),
+                        ))
                     }
                 },
-                _ => {
-                    // any other status can't be handled (Created, Running)
-                    // trace an error and return with unexpected status error
-                    // return ErrorThatTriggersCleanUp VenvInstallError SubInstallError UnexpectedStatus
-                    todo!();
-                }
+                _ => Err(ErrorThatTriggersCleanUp::VenvInstallError(
+                    SubInstallError::UnexpectedStatus(status),
+                )),
             },
-            Err(err) => {
-                // do clean up and return error
-                // return ErrorThatTriggersCleanUp VenvInstallError SubInstallError RunError
-                todo!();
+            Err(error) => Err(ErrorThatTriggersCleanUp::VenvInstallError(
+                SubInstallError::RunError(error),
+            )),
+        };
+
+        if let Err(error) = res {
+            return Err(self.clean_up_on_error_and_return_error(error).await);
+        }
+
+        // do some channel magic for req
+
+        let stdout_sender = self.stdout_sender.clone();
+        let warn_span_req_stout = tracing::warn_span!(
+            "LocalProjectInstaller::RequirementsStdout",
+            id = self.id.clone()
+        );
+        tokio::spawn(async move {
+            let _span_guard = warn_span_req_stout.enter();
+
+            while let Some(line) = req_stdout_receiver.recv().await {
+                if let Err(err) = req_stdout_file.write_all(line.as_bytes()).await {
+                    tracing::error!(%err, "Failed to write to file");
+                    break;
+                }
+                if let Some(sender) = &stdout_sender {
+                    if let Err(err) = sender.send(line).await {
+                        tracing::error!(%err, "Failed to send line to sender");
+                    }
+                }
             }
+        });
+
+        let stderr_sender = self.stderr_sender.clone();
+        let warn_span_req_stderr = tracing::warn_span!(
+            "LocalProjectInstaller::RequirementsStderr",
+            id = self.id.clone()
+        );
+        tokio::spawn(async move {
+            let _span_guard = warn_span_req_stderr.enter();
+
+            while let Some(line) = req_stderr_receiver.recv().await {
+                if let Err(err) = req_stderr_file.write_all(line.as_bytes()).await {
+                    tracing::error!(%err, "Failed to write to file");
+                    break;
+                }
+                if let Some(sender) = &stderr_sender {
+                    if let Err(err) = sender.send(line).await {
+                        tracing::error!(%err, "Failed to send line to sender");
+                    }
+                }
+            }
+        });
+
+        let res = match self.req_process.run(req_process_args).await {
+            Ok(status) => match status {
+                Status::Terminated(term_status) => match term_status {
+                    TerminationStatus::TerminatedSuccessfully => Ok(()),
+                    TerminationStatus::Killed(killed_term_status) => {
+                        Err(ErrorThatTriggersCleanUp::RequirementsInstallError(
+                            SubInstallError::Killed(killed_term_status),
+                        ))
+                    }
+                    TerminationStatus::TerminatedWithError(term_with_error_status) => {
+                        Err(ErrorThatTriggersCleanUp::RequirementsInstallError(
+                            SubInstallError::TerminatedWithError(term_with_error_status),
+                        ))
+                    }
+                },
+                _ => Err(ErrorThatTriggersCleanUp::RequirementsInstallError(
+                    SubInstallError::UnexpectedStatus(status),
+                )),
+            },
+            Err(error) => Err(ErrorThatTriggersCleanUp::RequirementsInstallError(
+                SubInstallError::RunError(error),
+            )),
+        };
+
+        if let Err(error) = res {
+            return Err(self.clean_up_on_error_and_return_error(error).await);
         }
 
         Ok(())
@@ -360,6 +430,27 @@ impl LocalProjectInstaller {
             self.project_env_dir.join("bin").join("pip3")
         }
     }
+
+    async fn clean_up_on_error(&mut self) -> Result<(), CleanUpError> {
+        //TODO: what to do with errors vec?
+        let io_errors_vector = self
+            .delete_environment_dir_if_exists()
+            .await
+            .map_err(CleanUpError::CouldNotDeleteEnvironment)?;
+        Ok(())
+    }
+
+    /// If an error occurs during the clean up, a `CleanUpError` is returned.
+    /// If no error occurs during the clean up, the given error mapped to a `InstallError` is returned.
+    async fn clean_up_on_error_and_return_error(
+        &mut self,
+        error: ErrorThatTriggersCleanUp,
+    ) -> InstallError {
+        match self.clean_up_on_error().await {
+            Ok(_) => StartInstallError::ErrorThatTriggersCleanUp(error).into(),
+            Err(clean_up_error) => InstallError::CleanUpError(error, clean_up_error),
+        }
+    }
 }
 
 #[derive(ThisError, Debug)]
@@ -482,18 +573,6 @@ pub enum StartInstallError {
         #[source]
         ErrorThatTriggersCleanUp,
     ),
-    // #[error("Could not create process: {0}")]
-    // ProcessCreateError(
-    //     #[from]
-    //     #[source]
-    //     ProcessRunError,
-    // ),
-    // #[error("Could not create file: {0}")]
-    // CreateFileError(
-    //     #[from]
-    //     #[source]
-    //     IoError,
-    // ),
 }
 
 #[derive(ThisError, Debug)]

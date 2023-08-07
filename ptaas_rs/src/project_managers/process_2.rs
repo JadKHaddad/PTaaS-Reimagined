@@ -45,7 +45,7 @@ pub enum TerminationWithErrorStatus {
     TerminatedWithErrorCode(i32),
 }
 
-/// Used `Process::run` to pass arguments, to improve readability.
+/// Used in `Process::run` to pass arguments, to improve readability.
 #[derive(Debug)]
 pub struct OsProcessArgs<I, S, P> {
     pub program: S,
