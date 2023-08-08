@@ -273,9 +273,12 @@ impl Process {
         );
 
         self.child = Some(child);
-        let child = self.child.as_mut().expect("Child was just set");
+        let child = self
+            .child
+            .as_mut()
+            .ok_or(ProcessRunError::OOPS(ChildNotSet {}))?;
 
-        tracing::debug!("Running Os process and waiting for signal");
+        tracing::debug!("Running Os process and waiting for termination or a cancellation signal");
 
         tokio::select! {
             result = cancel_channel_receiver => {
@@ -318,8 +321,6 @@ impl Process {
                 self.set_status_on_exit_status(exit_status).await;
             }
         }
-
-        tracing::debug!("Process finished");
 
         let status = self.status_holder.status().await;
 
@@ -366,7 +367,10 @@ impl Process {
     async fn check_if_still_running_and_kill_and_wait(
         &mut self,
     ) -> Result<ExitStatus, ProcessKillAndWaitError> {
-        let child = self.child.as_mut().expect("Child must be set");
+        let child = self
+            .child
+            .as_mut()
+            .ok_or(ProcessKillAndWaitError::OOPS(ChildNotSet {}))?;
 
         let option_exit_status = child
             .try_wait()
@@ -496,6 +500,12 @@ impl Process {
     }
 }
 
+/// Getting a `ChildNotSet` error, which is extremely weird, requires you to drop the process in order to kill and wait for the child.
+/// Long story short: this is a bug in the code. investigate it.
+#[derive(ThisError, Debug)]
+#[error("Some one should have set the child :D")]
+pub struct ChildNotSet {}
+
 #[derive(ThisError, Debug)]
 pub enum ProcessRunError {
     #[error("Process was already run!")]
@@ -512,6 +522,8 @@ pub enum ProcessRunError {
         #[from]
         ProcessKillAndWaitError,
     ),
+    #[error("OOPS: {0}")]
+    OOPS(ChildNotSet),
 }
 
 #[derive(ThisError, Debug)]
@@ -522,6 +534,8 @@ pub enum ProcessKillAndWaitError {
     CouldNotKillProcess(#[source] IoError),
     #[error("Could not wait for process: {0}")]
     CouldNotWaitForProcess(#[source] IoError),
+    #[error("OOPS: {0}")]
+    OOPS(ChildNotSet),
 }
 
 #[derive(ThisError, Debug)]
