@@ -37,7 +37,7 @@ pub enum KilledTerminationStatus {
 
 #[derive(Debug, Clone)]
 pub enum TerminationWithErrorStatus {
-    /// On SIGTERM, the process will exit UnknownErrorCode.
+    /// On SIGTERM, the process will exit with UnknownErrorCode.
     /// On windows, the process will exit with 1. This will be translated to `Killed` if `child_killed_successfuly` is true.
     /// On linux, the process will exit with UnknownErrorCode. This will be translated to `Killed` if `child_killed_successfuly` is true.
     /// Otherwise, it will not be translated.
@@ -257,23 +257,18 @@ impl Process {
             stderr_sender,
         } = os_process_args;
 
-        let mut child =
-            Self::spawn_os_process(program, args, current_dir, &stdout_sender, &stderr_sender)
-                .map_err(ProcessRunError::CouldNotSpawnOsProcess)?;
-
-        self.status_holder.overwrite(Status::Running).await;
-
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-
-        Self::forward_ios_to_channels(
-            stdout,
-            stderr,
-            stdout_sender,
-            stderr_sender,
+        let child = Self::spawn_os_process_and_forward_ios_to_channels(
+            program,
+            args,
+            current_dir,
             self.given_id.clone(),
             self.given_name.clone(),
-        );
+            stdout_sender,
+            stderr_sender,
+        )
+        .map_err(ProcessRunError::CouldNotSpawnOsProcess)?;
+
+        self.status_holder.overwrite(Status::Running).await;
 
         self.child = Some(child);
 
@@ -341,29 +336,45 @@ impl Process {
         Ok(())
     }
 
-    fn spawn_os_process<I, S, P>(
+    fn spawn_os_process_and_forward_ios_to_channels<I, S, P>(
         program: S,
         args: I,
         current_dir: P,
-        stdout_sender: &Option<mpsc::Sender<String>>,
-        stderr_sender: &Option<mpsc::Sender<String>>,
+        given_id: String,
+        given_name: String,
+        stdout_sender: Option<mpsc::Sender<String>>,
+        stderr_sender: Option<mpsc::Sender<String>>,
     ) -> Result<Child, IoError>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
         P: AsRef<Path>,
     {
-        let stdout = Self::pipe_if_some_else_null(stdout_sender);
-        let stderr = Self::pipe_if_some_else_null(stderr_sender);
+        let stdout = Self::pipe_if_some_else_null(&stdout_sender);
+        let stderr = Self::pipe_if_some_else_null(&stderr_sender);
 
-        Command::new(program)
+        let mut child = Command::new(program)
             .args(args)
             .current_dir(current_dir)
             .stdin(Stdio::null())
             .stdout(stdout)
             .stderr(stderr)
             .kill_on_drop(true)
-            .spawn()
+            .spawn()?;
+
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+
+        Self::forward_ios_to_channels(
+            stdout,
+            stderr,
+            stdout_sender,
+            stderr_sender,
+            given_id,
+            given_name,
+        );
+
+        Ok(child)
     }
 
     async fn check_if_still_running_and_kill_and_wait(
