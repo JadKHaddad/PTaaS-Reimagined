@@ -55,6 +55,7 @@ pub struct OsProcessArgs<I, S, P> {
     pub stderr_sender: Option<mpsc::Sender<String>>,
 }
 
+/// Conveniently holding an `Arc<RwLock<Status>>` to hide **ugly** operations.
 #[derive(Clone)]
 struct StatusHolder {
     status: Arc<RwLock<Status>>,
@@ -73,9 +74,9 @@ impl StatusHolder {
 pub struct ProcessController {
     status_holder: StatusHolder,
     given_id: String,
-    /// Option so we can take it
+    /// Option so we can take it. Sends a cancellation signal to the process.
     cancel_channel_sender: Option<oneshot::Sender<()>>,
-    /// Option so we can take it
+    /// Option so we can take it. Receives the cancellation result from the process.
     cancel_status_channel_receiver: Option<oneshot::Receiver<Option<ProcessKillAndWaitError>>>,
 }
 
@@ -131,16 +132,18 @@ impl ProcessController {
     }
 }
 
+/// Wrapper around `tokio::process::Child` abstracting away the **ugly** details.
 pub struct Process {
     status_holder: StatusHolder,
     given_id: String,
     given_name: String,
     child_killed_successfuly: bool,
     controller_dropped: bool,
+    /// Option so we can take it. `None` if the process has not started yet.
     child: Option<Child>,
-    /// Option so we can take it
+    /// Option so we can take it. `None` if the process has started. Receives the cancellation signal from the controller.
     cancel_status_channel_sender: Option<oneshot::Sender<Option<ProcessKillAndWaitError>>>,
-    /// Option so we can take it
+    /// Option so we can take it. `None` if the process has started. Sends the cancellation result to the controller.
     cancel_channel_receiver: Option<oneshot::Receiver<()>>,
 }
 
@@ -273,13 +276,26 @@ impl Process {
         );
 
         self.child = Some(child);
+
+        self.wait_for_signal_or_termination(cancel_channel_receiver, cancel_channel_sender)
+            .await?;
+
+        let status = self.status_holder.status().await;
+
+        Ok(status)
+    }
+
+    async fn wait_for_signal_or_termination(
+        &mut self,
+        cancel_channel_receiver: oneshot::Receiver<()>,
+        cancel_channel_sender: oneshot::Sender<Option<ProcessKillAndWaitError>>,
+    ) -> Result<(), ProcessRunError> {
         let child = self
             .child
             .as_mut()
             .ok_or(ProcessRunError::OOPS(ChildNotSet {}))?;
 
-        tracing::debug!("Running Os process and waiting for termination or a cancellation signal");
-
+        tracing::debug!("Waiting for termination or cancellation signal");
         tokio::select! {
             result = cancel_channel_receiver => {
                 if result.is_ok() {
@@ -322,14 +338,7 @@ impl Process {
             }
         }
 
-        let status = self.status_holder.status().await;
-
-        Ok(status)
-    }
-
-    async fn set_status_on_exit_status(&self, exit_status: ExitStatus) {
-        let new_status = self.get_status_on_exit_status(exit_status).await;
-        self.status_holder.overwrite(new_status).await;
+        Ok(())
     }
 
     fn spawn_os_process<I, S, P>(
@@ -355,13 +364,6 @@ impl Process {
             .stderr(stderr)
             .kill_on_drop(true)
             .spawn()
-    }
-
-    fn pipe_if_some_else_null<T>(option: &Option<T>) -> Stdio {
-        option
-            .as_ref()
-            .map(|_| Stdio::piped())
-            .unwrap_or(Stdio::null())
     }
 
     async fn check_if_still_running_and_kill_and_wait(
@@ -433,6 +435,18 @@ impl Process {
                 TerminationWithErrorStatus::TerminatedWithUnknownErrorCode,
             )),
         }
+    }
+
+    async fn set_status_on_exit_status(&self, exit_status: ExitStatus) {
+        let new_status = self.get_status_on_exit_status(exit_status).await;
+        self.status_holder.overwrite(new_status).await;
+    }
+
+    fn pipe_if_some_else_null<T>(option: &Option<T>) -> Stdio {
+        option
+            .as_ref()
+            .map(|_| Stdio::piped())
+            .unwrap_or(Stdio::null())
     }
 
     fn forward_ios_to_channels(
