@@ -135,6 +135,9 @@ pub struct Process {
     status_holder: StatusHolder,
     given_id: String,
     given_name: String,
+    child_killed_successfuly: bool,
+    controller_dropped: bool,
+    child: Option<Child>,
     /// Option so we can take it
     cancel_status_channel_sender: Option<oneshot::Sender<Option<ProcessKillAndWaitError>>>,
     /// Option so we can take it
@@ -143,10 +146,47 @@ pub struct Process {
 
 impl Drop for Process {
     fn drop(&mut self) {
-        let debug_span = debug_span!("Process::drop", given_id = self.given_id);
-        let _span_guard = debug_span.enter();
+        let child = self.child.take();
 
-        tracing::debug!("Dropping process");
+        let debug_span = debug_span!("Process::drop", given_id = self.given_id);
+
+        {
+            let _debug_span_guard = debug_span.enter();
+            tracing::debug!("Dropping process");
+        }
+
+        let warn_span = warn_span!("Process::drop", given_id = self.given_id);
+
+        if let Some(mut child) = child {
+            if !self.child_killed_successfuly {
+                tokio::spawn(async move {
+                    let _debug_span_guard = debug_span.enter();
+                    let _warn_span_guard = warn_span.enter();
+
+                    tracing::warn!("Os process is being dropped without being killed first");
+
+                    match child.kill().await {
+                        Ok(_) => {
+                            tracing::debug!("Killed os process");
+                        }
+                        Err(err) => {
+                            tracing::warn!(%err, "Failed to kill os process");
+                        }
+                    }
+
+                    match child.wait().await {
+                        Ok(_) => {
+                            tracing::debug!("Waited for os process to terminate");
+                        }
+                        Err(err) => {
+                            tracing::warn!(%err, "Failed to wait for os process to terminate");
+                        }
+                    }
+
+                    tracing::debug!("Dropping os process");
+                });
+            }
+        }
     }
 }
 
@@ -163,6 +203,9 @@ impl Process {
             status_holder: status_holder.clone(),
             given_id: given_id.clone(),
             given_name,
+            child_killed_successfuly: false,
+            controller_dropped: false,
+            child: None,
             cancel_status_channel_sender: Some(cancel_status_channel_sender),
             cancel_channel_receiver: Some(cancel_channel_receiver),
         };
@@ -229,6 +272,9 @@ impl Process {
             self.given_name.clone(),
         );
 
+        self.child = Some(child);
+        let child = self.child.as_mut().expect("Child was just set");
+
         tracing::debug!("Running Os process and waiting for signal");
 
         tokio::select! {
@@ -240,10 +286,9 @@ impl Process {
 
                     // The process was explicitly cancelled by the controller
                     // Cancellation errors are sent to the controller and this function returns
-                    match Self::check_if_still_running_and_kill_and_wait(child).await {
-                        Ok((exit_status, child_killed_successfully)) => {
-                            let new_status = Self::get_status_on_exit_status(exit_status, child_killed_successfully, false).await;
-                            self.status_holder.overwrite(new_status).await;
+                    match self.check_if_still_running_and_kill_and_wait().await {
+                        Ok(exit_status) => {
+                            self.set_status_on_exit_status(exit_status).await;
 
                             cancel_channel_sender
                                 .send(None).map_err(|_| ProcessRunError::ControllerDropped)?;
@@ -253,14 +298,14 @@ impl Process {
                     }
                 }
                 else {
+                    self.controller_dropped = true;
                     tracing::debug!(
                         "Os process was cancelled by dropping the controller"
                     );
 
                     // The controller was dropped, wich means we can't send the cancelation error, so we return it here
-                    let (exit_status, child_killed_successfully) = Self::check_if_still_running_and_kill_and_wait(child).await?;
-                    let new_status = Self::get_status_on_exit_status(exit_status, child_killed_successfully, true).await;
-                    self.status_holder.overwrite(new_status).await;
+                    let exit_status = self.check_if_still_running_and_kill_and_wait().await?;
+                    self.set_status_on_exit_status(exit_status).await;
                 }
             }
 
@@ -270,8 +315,7 @@ impl Process {
                 );
 
                 let exit_status = result_exit_status.map_err(ProcessRunError::CouldNotWaitForOsProcess)?;
-                let new_status = Self::get_status_on_exit_status(exit_status, false, false).await;
-                self.status_holder.overwrite(new_status).await;
+                self.set_status_on_exit_status(exit_status).await;
             }
         }
 
@@ -280,6 +324,11 @@ impl Process {
         let status = self.status_holder.status().await;
 
         Ok(status)
+    }
+
+    async fn set_status_on_exit_status(&self, exit_status: ExitStatus) {
+        let new_status = self.get_status_on_exit_status(exit_status).await;
+        self.status_holder.overwrite(new_status).await;
     }
 
     fn spawn_os_process<I, S, P>(
@@ -315,45 +364,43 @@ impl Process {
     }
 
     async fn check_if_still_running_and_kill_and_wait(
-        mut child: Child,
-    ) -> Result<(ExitStatus, bool), ProcessKillAndWaitError> {
+        &mut self,
+    ) -> Result<ExitStatus, ProcessKillAndWaitError> {
+        let child = self.child.as_mut().expect("Child must be set");
+
         let option_exit_status = child
             .try_wait()
             .map_err(ProcessKillAndWaitError::CouldNotCheckStatus)?;
 
-        let (exit_status, killed) = match option_exit_status {
-            Some(exit_status) => (exit_status, false),
+        let exit_status = match option_exit_status {
+            Some(exit_status) => exit_status,
             None => {
                 child
                     .kill()
                     .await
                     .map_err(ProcessKillAndWaitError::CouldNotKillProcess)?;
 
-                let exit_status = child
+                self.child_killed_successfuly = true;
+
+                child
                     .wait()
                     .await
-                    .map_err(ProcessKillAndWaitError::CouldNotWaitForProcess)?;
-
-                (exit_status, true)
+                    .map_err(ProcessKillAndWaitError::CouldNotWaitForProcess)?
             }
         };
 
-        Ok((exit_status, killed))
+        Ok(exit_status)
     }
 
-    async fn get_status_on_exit_status(
-        exit_status: ExitStatus,
-        child_killed_successfuly: bool,
-        controller_dropped: bool,
-    ) -> Status {
+    async fn get_status_on_exit_status(&self, exit_status: ExitStatus) -> Status {
         if exit_status.success() {
             return Status::Terminated(TerminationStatus::TerminatedSuccessfully);
         };
 
         match exit_status.code() {
             Some(code) => match code {
-                1 if cfg!(target_os = "windows") && child_killed_successfuly => {
-                    if controller_dropped {
+                1 if cfg!(target_os = "windows") && self.child_killed_successfuly => {
+                    if self.controller_dropped {
                         return Status::Terminated(TerminationStatus::Killed(
                             KilledTerminationStatus::KilledByDroppingController,
                         ));
@@ -367,8 +414,8 @@ impl Process {
                     TerminationWithErrorStatus::TerminatedWithErrorCode(code),
                 )),
             },
-            None if cfg!(target_os = "linux") && child_killed_successfuly => {
-                if controller_dropped {
+            None if cfg!(target_os = "linux") && self.child_killed_successfuly => {
+                if self.controller_dropped {
                     return Status::Terminated(TerminationStatus::Killed(
                         KilledTerminationStatus::KilledByDroppingController,
                     ));
@@ -428,14 +475,18 @@ impl Process {
                 io_name = io_name,
                 given_name = given_name
             );
-            let _span_guard = debug_span.enter();
+            {
+                let _span_guard = debug_span.enter();
+                tracing::debug!("Starting to forward IO");
+            }
 
-            tracing::debug!("Starting to forward IO");
             while let Ok(Some(line)) = lines.next_line().await {
                 if sender.send(line).await.is_err() {
                     break;
                 }
             }
+
+            let _span_guard = debug_span.enter();
             tracing::debug!("Finished forwarding IO");
         });
     }
@@ -505,6 +556,15 @@ mod tests {
         panic!("Uncovered target_os.");
     }
 
+    fn get_non_stop_numbers_script_path() -> PathBuf {
+        if cfg!(target_os = "linux") {
+            return get_tests_dir().join("non_stop_numbers.sh");
+        } else if cfg!(target_os = "windows") {
+            return get_tests_dir().join("non_stop_numbers.ps1");
+        }
+        panic!("Uncovered target_os.");
+    }
+
     fn get_numbers_script_with_error_code_path() -> PathBuf {
         if cfg!(target_os = "linux") {
             return get_tests_dir().join("numbers_with_error_code.sh");
@@ -556,6 +616,14 @@ mod tests {
         stderr_sender: Option<mpsc::Sender<String>>,
     ) -> OsProcessArgs<Vec<String>, String, String> {
         let path = get_numbers_script_path();
+        create_process_args(program().to_owned(), path, stdout_sender, stderr_sender)
+    }
+
+    fn create_non_stop_number_process_run_args_with_channels(
+        stdout_sender: Option<mpsc::Sender<String>>,
+        stderr_sender: Option<mpsc::Sender<String>>,
+    ) -> OsProcessArgs<Vec<String>, String, String> {
+        let path = get_non_stop_numbers_script_path();
         create_process_args(program().to_owned(), path, stdout_sender, stderr_sender)
     }
 
@@ -837,5 +905,39 @@ mod tests {
         assert_exit_with_error_code_1(result);
 
         task_handler.await.expect("Error awaiting handler.");
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    #[ignore]
+    async fn observe_process_drop_for_humans() {
+        let (mut process, controller) = create_numbers_process();
+        let (stdout_sender, stdout_receiver) = mpsc::channel(10);
+
+        let args = create_non_stop_number_process_run_args_with_channels(Some(stdout_sender), None);
+
+        let task_handler = tokio::spawn(async move {
+            let mut stdout = stdout_receiver;
+
+            while let Some(line) = stdout.recv().await {
+                println!("Received line: {}", line);
+            }
+        });
+
+        // ensuring a drop after a select!
+        tokio::spawn(async move {
+            let _move_controller = controller;
+            tokio::select! {
+                _ = process.run(args) => {
+
+                }
+                _ = tokio::time::sleep(Duration::from_secs(2)) => {
+                    println!("Process timed out.");
+                }
+            }
+        });
+
+        task_handler.await.expect("Error awaiting handler.");
+        tokio::time::sleep(Duration::from_secs(5)).await;
     }
 }
