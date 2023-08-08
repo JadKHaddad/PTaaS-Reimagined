@@ -397,47 +397,49 @@ impl Process {
         Ok(exit_status)
     }
 
-    async fn get_status_on_exit_status(&self, exit_status: ExitStatus) -> Status {
+    async fn get_termination_status_on_exit_status(
+        &self,
+        exit_status: ExitStatus,
+    ) -> TerminationStatus {
         if exit_status.success() {
-            return Status::Terminated(TerminationStatus::TerminatedSuccessfully);
+            return TerminationStatus::TerminatedSuccessfully;
         };
 
         match exit_status.code() {
             Some(code) => match code {
                 1 if cfg!(target_os = "windows") && self.child_killed_successfuly => {
                     if self.controller_dropped {
-                        return Status::Terminated(TerminationStatus::Killed(
+                        return TerminationStatus::Killed(
                             KilledTerminationStatus::KilledByDroppingController,
-                        ));
+                        );
                     }
 
-                    Status::Terminated(TerminationStatus::Killed(
-                        KilledTerminationStatus::KilledByCancellationSignal,
-                    ))
+                    TerminationStatus::Killed(KilledTerminationStatus::KilledByCancellationSignal)
                 }
-                _ => Status::Terminated(TerminationStatus::TerminatedWithError(
+                _ => TerminationStatus::TerminatedWithError(
                     TerminationWithErrorStatus::TerminatedWithErrorCode(code),
-                )),
+                ),
             },
             None if cfg!(target_os = "linux") && self.child_killed_successfuly => {
                 if self.controller_dropped {
-                    return Status::Terminated(TerminationStatus::Killed(
+                    return TerminationStatus::Killed(
                         KilledTerminationStatus::KilledByDroppingController,
-                    ));
+                    );
                 }
 
-                Status::Terminated(TerminationStatus::Killed(
-                    KilledTerminationStatus::KilledByCancellationSignal,
-                ))
+                TerminationStatus::Killed(KilledTerminationStatus::KilledByCancellationSignal)
             }
-            _ => Status::Terminated(TerminationStatus::TerminatedWithError(
+            _ => TerminationStatus::TerminatedWithError(
                 TerminationWithErrorStatus::TerminatedWithUnknownErrorCode,
-            )),
+            ),
         }
     }
 
     async fn set_status_on_exit_status(&self, exit_status: ExitStatus) {
-        let new_status = self.get_status_on_exit_status(exit_status).await;
+        let termination_status = self
+            .get_termination_status_on_exit_status(exit_status)
+            .await;
+        let new_status = Status::Terminated(termination_status);
         self.status_holder.overwrite(new_status).await;
     }
 
