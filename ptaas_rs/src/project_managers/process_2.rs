@@ -249,28 +249,9 @@ impl Process {
             .take()
             .ok_or(ProcessRunError::AlreayTriedToRun)?;
 
-        let OsProcessArgs {
-            program,
-            args,
-            current_dir,
-            stdout_sender,
-            stderr_sender,
-        } = os_process_args;
-
-        let child = Self::spawn_os_process_and_forward_ios_to_channels(
-            program,
-            args,
-            current_dir,
-            self.given_id.clone(),
-            self.given_name.clone(),
-            stdout_sender,
-            stderr_sender,
-        )
-        .map_err(ProcessRunError::CouldNotSpawnOsProcess)?;
-
-        self.status_holder.overwrite(Status::Running).await;
-
-        self.child = Some(child);
+        self.spawn_os_process_and_forward_ios_to_channels(os_process_args)
+            .await
+            .map_err(ProcessRunError::CouldNotSpawnOsProcess)?;
 
         self.wait_for_signal_or_termination(cancel_channel_receiver, cancel_channel_sender)
             .await?;
@@ -336,20 +317,23 @@ impl Process {
         Ok(())
     }
 
-    fn spawn_os_process_and_forward_ios_to_channels<I, S, P>(
-        program: S,
-        args: I,
-        current_dir: P,
-        given_id: String,
-        given_name: String,
-        stdout_sender: Option<mpsc::Sender<String>>,
-        stderr_sender: Option<mpsc::Sender<String>>,
-    ) -> Result<Child, IoError>
+    async fn spawn_os_process_and_forward_ios_to_channels<I, S, P>(
+        &mut self,
+        os_process_args: OsProcessArgs<I, S, P>,
+    ) -> Result<(), IoError>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
         P: AsRef<Path>,
     {
+        let OsProcessArgs {
+            program,
+            args,
+            current_dir,
+            stdout_sender,
+            stderr_sender,
+        } = os_process_args;
+
         let stdout = Self::pipe_if_some_else_null(&stdout_sender);
         let stderr = Self::pipe_if_some_else_null(&stderr_sender);
 
@@ -370,11 +354,15 @@ impl Process {
             stderr,
             stdout_sender,
             stderr_sender,
-            given_id,
-            given_name,
+            self.given_id.clone(),
+            self.given_name.clone(),
         );
 
-        Ok(child)
+        self.status_holder.overwrite(Status::Running).await;
+
+        self.child = Some(child);
+
+        Ok(())
     }
 
     async fn check_if_still_running_and_kill_and_wait(
