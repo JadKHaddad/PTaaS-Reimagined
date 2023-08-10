@@ -111,7 +111,9 @@ impl LocalProjectInstaller {
     pub async fn check_and_run_installation(&mut self) -> Result<(), InstallError> {
         self.check().await.map_err(StartInstallError::CheckFailed)?;
 
-        let uploaded_project_dir = &self.uploaded_project_dir;
+        let uploaded_project_dir_str = self.uploaded_project_dir.to_str().ok_or(
+            StartInstallError::FailedToConvertPathBufToString(self.uploaded_project_dir.clone()),
+        )?;
 
         let project_env_dir = &self.project_env_dir;
         let project_env_dir_str =
@@ -136,28 +138,28 @@ impl LocalProjectInstaller {
                 ))?;
 
         // create files and channels
-        let venv_stdout_file_path = uploaded_project_dir.join("venv_stdout.txt");
+        let venv_stdout_file_path = self.get_venv_out_file_path();
         let mut venv_stdout_file = File::create(&venv_stdout_file_path).await.map_err(|e| {
             StartInstallError::VenvStartError(SubStartInstallError::CreateFileError(
                 CreateFileError::CouldNotCreateFile(e, venv_stdout_file_path),
             ))
         })?;
 
-        let venv_stderr_file_path = uploaded_project_dir.join("venv_stderr.txt");
+        let venv_stderr_file_path = self.get_venv_err_file_path();
         let mut venv_stderr_file = File::create(&venv_stderr_file_path).await.map_err(|e| {
             StartInstallError::VenvStartError(SubStartInstallError::CreateFileError(
                 CreateFileError::CouldNotCreateFile(e, venv_stderr_file_path),
             ))
         })?;
 
-        let req_stdout_file_path = uploaded_project_dir.join("req_stdout.txt");
+        let req_stdout_file_path = self.get_req_out_file_path();
         let mut req_stdout_file = File::create(&req_stdout_file_path).await.map_err(|e| {
             StartInstallError::RequirementsStartError(SubStartInstallError::CreateFileError(
                 CreateFileError::CouldNotCreateFile(e, req_stdout_file_path),
             ))
         })?;
 
-        let req_stderr_file_path = uploaded_project_dir.join("req_stderr.txt");
+        let req_stderr_file_path = self.get_req_err_file_path();
         let mut req_stderr_file = File::create(&req_stderr_file_path).await.map_err(|e| {
             StartInstallError::RequirementsStartError(SubStartInstallError::CreateFileError(
                 CreateFileError::CouldNotCreateFile(e, req_stderr_file_path),
@@ -174,7 +176,7 @@ impl LocalProjectInstaller {
         let venv_process_args = OsProcessArgs {
             program: "python3",
             args: vec!["-m", "venv", project_env_dir_str],
-            current_dir: ".",
+            current_dir: uploaded_project_dir_str,
             stdout_sender: Some(venv_stdout_sender),
             stderr_sender: Some(venv_stderr_sender),
         };
@@ -182,50 +184,39 @@ impl LocalProjectInstaller {
         let req_process_args = OsProcessArgs {
             program: pip_path_str,
             args: vec!["install", "-r", requirements_file_path_str],
-            current_dir: ".",
+            current_dir: uploaded_project_dir_str,
             stdout_sender: Some(req_stdout_sender),
             stderr_sender: Some(req_stderr_sender),
         };
 
         // do some channel magic for venv
-
         let stdout_sender = self.stdout_sender.clone();
-        let warn_span_venv_stout = tracing::warn_span!(
-            "LocalProjectInstaller::VirtualEnvStdout",
-            id = self.id.clone()
-        );
         tokio::spawn(async move {
-            let _span_guard = warn_span_venv_stout.enter();
-
-            while let Some(line) = venv_stdout_receiver.recv().await {
+            while let Some(mut line) = venv_stdout_receiver.recv().await {
+                line.push('\n');
                 if let Err(err) = venv_stdout_file.write_all(line.as_bytes()).await {
-                    tracing::error!(%err, "Failed to write to file");
+                    tracing::error!(%err, io_name="venv_stout", "Failed to write to file");
                     break;
                 }
                 if let Some(sender) = &stdout_sender {
                     if let Err(err) = sender.send(line).await {
-                        tracing::error!(%err, "Failed to send line to sender");
+                        tracing::error!(%err, io_name="venv_stout", "Failed to send line to sender");
                     }
                 }
             }
         });
 
         let stderr_sender = self.stderr_sender.clone();
-        let warn_span_venv_stderr = tracing::warn_span!(
-            "LocalProjectInstaller::VirtualEnvStderr",
-            id = self.id.clone()
-        );
         tokio::spawn(async move {
-            let _span_guard = warn_span_venv_stderr.enter();
-
-            while let Some(line) = venv_stderr_receiver.recv().await {
+            while let Some(mut line) = venv_stderr_receiver.recv().await {
+                line.push('\n');
                 if let Err(err) = venv_stderr_file.write_all(line.as_bytes()).await {
-                    tracing::error!(%err, "Failed to write to file");
+                    tracing::error!(%err, io_name="venv_sterr", "Failed to write to file");
                     break;
                 }
                 if let Some(sender) = &stderr_sender {
                     if let Err(err) = sender.send(line).await {
-                        tracing::error!(%err, "Failed to send line to sender");
+                        tracing::error!(%err, io_name="venv_sterr", "Failed to send line to sender");
                     }
                 }
             }
@@ -240,44 +231,33 @@ impl LocalProjectInstaller {
         }
 
         // do some channel magic for req
-
         let stdout_sender = self.stdout_sender.clone();
-        let warn_span_req_stout = tracing::warn_span!(
-            "LocalProjectInstaller::RequirementsStdout",
-            id = self.id.clone()
-        );
         tokio::spawn(async move {
-            let _span_guard = warn_span_req_stout.enter();
-
-            while let Some(line) = req_stdout_receiver.recv().await {
+            while let Some(mut line) = req_stdout_receiver.recv().await {
+                line.push('\n');
                 if let Err(err) = req_stdout_file.write_all(line.as_bytes()).await {
-                    tracing::error!(%err, "Failed to write to file");
+                    tracing::error!(%err, io_name="req_stdout", "Failed to write to file");
                     break;
                 }
                 if let Some(sender) = &stdout_sender {
                     if let Err(err) = sender.send(line).await {
-                        tracing::error!(%err, "Failed to send line to sender");
+                        tracing::error!(%err, io_name="req_stdout", "Failed to send line to sender");
                     }
                 }
             }
         });
 
         let stderr_sender = self.stderr_sender.clone();
-        let warn_span_req_stderr = tracing::warn_span!(
-            "LocalProjectInstaller::RequirementsStderr",
-            id = self.id.clone()
-        );
         tokio::spawn(async move {
-            let _span_guard = warn_span_req_stderr.enter();
-
-            while let Some(line) = req_stderr_receiver.recv().await {
+            while let Some(mut line) = req_stderr_receiver.recv().await {
+                line.push('\n');
                 if let Err(err) = req_stderr_file.write_all(line.as_bytes()).await {
-                    tracing::error!(%err, "Failed to write to file");
+                    tracing::error!(%err, io_name="req_stderr", "Failed to write to file");
                     break;
                 }
                 if let Some(sender) = &stderr_sender {
                     if let Err(err) = sender.send(line).await {
-                        tracing::error!(%err, "Failed to send line to sender");
+                        tracing::error!(%err, io_name="req_stderr", "Failed to send line to sender");
                     }
                 }
             }
@@ -318,12 +298,36 @@ impl LocalProjectInstaller {
         self.uploaded_project_dir.join("locust")
     }
 
-    fn get_process_out_file_path(&self) -> PathBuf {
-        self.uploaded_project_dir.join("out.txt")
+    fn get_venv_out_file_path(&self) -> PathBuf {
+        self.uploaded_project_dir.join("venv_out.txt")
     }
 
-    fn get_process_err_file_path(&self) -> PathBuf {
-        self.uploaded_project_dir.join("err.txt")
+    fn get_venv_err_file_path(&self) -> PathBuf {
+        self.uploaded_project_dir.join("venv_err.txt")
+    }
+
+    fn get_req_out_file_path(&self) -> PathBuf {
+        self.uploaded_project_dir.join("req_out.txt")
+    }
+
+    fn get_req_err_file_path(&self) -> PathBuf {
+        self.uploaded_project_dir.join("req_err.txt")
+    }
+
+    pub async fn get_venv_out_from_file(&self) -> Result<String, IoError> {
+        fs::read_to_string(self.get_venv_out_file_path()).await
+    }
+
+    pub async fn get_venv_err_from_file(&self) -> Result<String, IoError> {
+        fs::read_to_string(self.get_venv_err_file_path()).await
+    }
+
+    pub async fn get_req_out_from_file(&self) -> Result<String, IoError> {
+        fs::read_to_string(self.get_req_out_file_path()).await
+    }
+
+    pub async fn get_req_err_from_file(&self) -> Result<String, IoError> {
+        fs::read_to_string(self.get_req_err_file_path()).await
     }
 
     /// A 'check' function fails if the project is not valid.
@@ -715,13 +719,13 @@ mod tests {
         #[tokio::test]
         #[traced_test]
         #[ignore]
-        pub async fn tester() {
+        pub async fn valid() {
             let project_id_and_dir = String::from("valid");
             let uploaded_project_dir = get_uploaded_projects_dir().join(&project_id_and_dir);
             let installed_project_dir = get_installed_projects_dir().join(&project_id_and_dir);
             let project_env_dir = get_environments_dir().join(&project_id_and_dir);
 
-            let (mut installer, mut controller) = LocalProjectInstaller::new(
+            let (mut installer, _controller) = LocalProjectInstaller::new(
                 project_id_and_dir,
                 uploaded_project_dir,
                 installed_project_dir,
@@ -730,35 +734,26 @@ mod tests {
                 None,
             );
 
-            let handler = tokio::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                println!("Cancelling after 5 seconds");
-                controller.cancel().await;
-            });
-
-            match installer.check_and_run_installation().await {
-                Ok(_) => {
-                    println!("Installation finished");
-                }
-                Err(e) => panic!("Unexpected error: {}", e),
+            if let Err(e) = installer.check_and_run_installation().await {
+                panic!("Unexpected error: {}", e);
             }
 
-            // installer
-            //     .delete_environment_dir_if_exists()
-            //     .await
-            //     .expect("Could not delete environment dir");
-
-            let error_file_path = installer.get_process_err_file_path();
-            let error_output = fs::read_to_string(error_file_path)
+            installer
+                .delete_environment_dir_if_exists()
                 .await
-                .expect("Could not read error file");
+                .expect("Could not delete environment dir");
 
-            let output_file_path = installer.get_process_out_file_path();
-            let output_output = fs::read_to_string(output_file_path)
+            let venv_err = installer
+                .get_venv_err_from_file()
                 .await
-                .expect("Could not read output file");
+                .expect("Could not get venv err");
+            println!("venv_err: {}", venv_err);
 
-            handler.await.expect("Could not join handler");
+            let req_err = installer
+                .get_req_err_from_file()
+                .await
+                .expect("Could not get req err");
+            println!("req_err: {}", req_err);
         }
     }
 }

@@ -349,14 +349,7 @@ impl Process {
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
 
-        Self::forward_ios_to_channels(
-            stdout,
-            stderr,
-            stdout_sender,
-            stderr_sender,
-            self.given_id.clone(),
-            self.given_name.clone(),
-        );
+        Self::forward_ios_to_channels(stdout, stderr, stdout_sender, stderr_sender);
 
         self.status_holder.overwrite(Status::Running).await;
 
@@ -455,24 +448,16 @@ impl Process {
         stderr: Option<ChildStderr>,
         stdout_sender: Option<mpsc::Sender<String>>,
         stderr_sender: Option<mpsc::Sender<String>>,
-        given_id: String,
-        given_name: String,
     ) {
         if let Some(sender) = stdout_sender {
             if let Some(stdout) = stdout {
-                Self::forward_io(
-                    stdout,
-                    sender,
-                    given_id.clone(),
-                    given_name.clone(),
-                    "stdout",
-                );
+                Self::forward_io(stdout, sender, "stdout");
             }
         }
 
         if let Some(sender) = stderr_sender {
             if let Some(stderr) = stderr {
-                Self::forward_io(stderr, sender, given_id, given_name, "stderr");
+                Self::forward_io(stderr, sender, "stderr");
             }
         }
     }
@@ -480,33 +465,19 @@ impl Process {
     fn forward_io<T: AsyncRead + Unpin + Send + 'static>(
         stdio: T,
         sender: mpsc::Sender<String>,
-        given_id: String,
-        given_name: String,
         io_name: &'static str,
     ) {
         let reader = io::BufReader::new(stdio);
         let mut lines = reader.lines();
 
         tokio::spawn(async move {
-            let debug_span = tracing::debug_span!(
-                "Process::Forwarding_IO",
-                given_id = given_id,
-                io_name = io_name,
-                given_name = given_name
-            );
-            {
-                let _span_guard = debug_span.enter();
-                tracing::debug!("Starting to forward IO");
-            }
-
+            tracing::debug!(io_name, "Starting to forward IO");
             while let Ok(Some(line)) = lines.next_line().await {
                 if sender.send(line).await.is_err() {
                     break;
                 }
             }
-
-            let _span_guard = debug_span.enter();
-            tracing::debug!("Finished forwarding IO");
+            tracing::debug!(io_name, "Finished forwarding IO");
         });
     }
 
