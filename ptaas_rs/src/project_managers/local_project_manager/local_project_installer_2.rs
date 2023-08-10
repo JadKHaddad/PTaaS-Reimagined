@@ -1,6 +1,7 @@
 use crate::project_managers::process_2::{
-    KilledTerminationStatus, OsProcessArgs, Process, ProcessController, ProcessKillAndWaitError,
-    ProcessRunError, Status, TerminationStatus, TerminationWithErrorStatus,
+    CancellationError, KilledTerminationStatus, OsProcessArgs, Process, ProcessController,
+    ProcessKillAndWaitError, ProcessRunError, Status, TerminationStatus,
+    TerminationWithErrorStatus,
 };
 use std::path::PathBuf;
 use std::time::Duration;
@@ -47,13 +48,35 @@ pub struct LocalProjectInstallerController {
     req_controller: ProcessController,
 }
 
-// TODO: some logic for errors
 impl LocalProjectInstallerController {
-    pub async fn cancel(&mut self) {
-        let res = self.venv_controller.cancel().await;
-        tracing::debug!("venv controller cancel result: {:?}", res);
-        let res = self.req_controller.cancel().await;
-        tracing::debug!("req controller cancel result: {:?}", res);
+    pub async fn cancel(&mut self) -> Result<(), ()> {
+        let venv_cancel_result: Result<Option<ProcessKillAndWaitError>, CancellationError> =
+            self.venv_controller.cancel().await;
+
+        match venv_cancel_result {
+            Ok(option_kill_and_wait_error) => {
+                match option_kill_and_wait_error {
+                    Some(error) => {
+                        todo!()
+                    }
+                    None => {
+                        // all good
+                        todo!()
+                    }
+                }
+            }
+            Err(cancellation_error) => match cancellation_error {
+                CancellationError::ProcessNotRunning => {
+                    todo!()
+                }
+                CancellationError::AlreayTriedToCancel => {
+                    todo!()
+                }
+                CancellationError::ProcessTerminated => {
+                    todo!()
+                }
+            },
+        }
     }
 }
 
@@ -66,11 +89,6 @@ pub struct LocalProjectInstaller {
     req_process: Process,
     stdout_sender: Option<mpsc::Sender<String>>,
     stderr_sender: Option<mpsc::Sender<String>>,
-}
-
-struct FileAndStringPath {
-    file: File,
-    path: String,
 }
 
 impl LocalProjectInstaller {
@@ -718,7 +736,7 @@ mod tests {
 
         #[tokio::test]
         #[traced_test]
-        #[ignore]
+        #[ignore = "Failing on CI for some reason"]
         pub async fn valid() {
             let project_id_and_dir = String::from("valid");
             let uploaded_project_dir = get_uploaded_projects_dir().join(&project_id_and_dir);

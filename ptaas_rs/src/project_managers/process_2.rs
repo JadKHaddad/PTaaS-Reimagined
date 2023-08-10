@@ -524,6 +524,7 @@ pub enum ProcessKillAndWaitError {
     OOPS(ChildNotSet),
 }
 
+/// An error that accures when trying to cancel a process
 #[derive(ThisError, Debug)]
 pub enum CancellationError {
     #[error("Process is not running")]
@@ -706,16 +707,19 @@ mod tests {
 
     #[tokio::test]
     #[traced_test]
-    async fn run_numbers_script_and_kill_before_termination_and_expect_killed() {
+    async fn run_numbers_script_and_kill_before_termination_and_expect_killed_and_no_kill_and_wait_error(
+    ) {
         let (mut process, mut controller) = create_numbers_process();
         let args = create_number_process_run_args();
 
         let tast_handler = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(2)).await;
-            controller
+            let kill_and_wait_error = controller
                 .cancel()
                 .await
                 .expect("Error cancelling process.");
+
+            assert!(kill_and_wait_error.is_none());
         });
 
         let result = process.run(args).await;
@@ -743,6 +747,21 @@ mod tests {
         assert_terminated_successfully(result);
 
         task_handler.await.expect("Error waiting for handler.");
+    }
+
+    #[tokio::test]
+    #[traced_test]
+    #[ignore = "This test is redundant: run_numbers_script_and_kill_after_termination_and_expect_terminated_successfully_and_process_terminated"]
+    async fn cancel_process_after_termination_and_expect_process_terminated_error() {
+        let (mut process, mut controller) = create_numbers_process();
+        let args = create_number_process_run_args();
+
+        process.run(args).await.expect("Error running process.");
+
+        match controller.cancel().await {
+            Err(CancellationError::ProcessTerminated) => {}
+            result => panic!("Unexpected result {:?}", result),
+        }
     }
 
     #[tokio::test]
@@ -779,20 +798,6 @@ mod tests {
 
         match controller.cancel().await {
             Err(CancellationError::ProcessNotRunning) => {}
-            result => panic!("Unexpected result {:?}", result),
-        }
-    }
-
-    #[tokio::test]
-    #[traced_test]
-    async fn cancel_process_after_termination_and_expect_process_terminated_error() {
-        let (mut process, mut controller) = create_numbers_process();
-        let args = create_number_process_run_args();
-
-        process.run(args).await.expect("Error running process.");
-
-        match controller.cancel().await {
-            Err(CancellationError::ProcessTerminated) => {}
             result => panic!("Unexpected result {:?}", result),
         }
     }
@@ -909,7 +914,7 @@ mod tests {
 
     #[tokio::test]
     #[traced_test]
-    #[ignore]
+    #[ignore = "This is an observation test"]
     async fn observe_process_drop_for_humans() {
         let (mut process, controller) = create_numbers_process();
         let (stdout_sender, stdout_receiver) = mpsc::channel(10);
