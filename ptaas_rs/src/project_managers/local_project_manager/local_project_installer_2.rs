@@ -1003,7 +1003,7 @@ mod tests {
 
         #[tokio::test]
         #[traced_test]
-        #[ignore = "Failing on CI for some reason"]
+        // #[ignore = "Failing on CI for some reason"]
         pub async fn valid() {
             let project_id_and_dir = String::from("valid");
             let (mut installer, _controller) =
