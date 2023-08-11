@@ -81,7 +81,9 @@ pub struct ProcessController {
 }
 
 impl ProcessController {
-    pub async fn cancel(&mut self) -> Result<Option<ProcessKillAndWaitError>, CancellationError> {
+    pub async fn cancel(
+        &mut self,
+    ) -> Result<Option<ProcessKillAndWaitError>, SendingCancellationSignalToProcessError> {
         let debug_span = debug_span!("ProcessController::cancel", given_id = self.given_id);
         let warn_span = warn_span!("ProcessController::cancel", given_id = self.given_id);
 
@@ -91,11 +93,11 @@ impl ProcessController {
         match self.status_holder.status().await {
             Status::Created => {
                 tracing::debug!("Process has not started yet");
-                return Err(CancellationError::ProcessNotRunning);
+                return Err(SendingCancellationSignalToProcessError::ProcessNotRunning);
             }
             Status::Terminated(_) => {
                 tracing::debug!("Process is already terminated");
-                return Err(CancellationError::ProcessTerminated);
+                return Err(SendingCancellationSignalToProcessError::ProcessTerminated);
             }
             Status::Running => {}
         }
@@ -103,23 +105,23 @@ impl ProcessController {
         let cancel_channel_sender = self
             .cancel_channel_sender
             .take()
-            .ok_or(CancellationError::AlreayTriedToCancel)?;
+            .ok_or(SendingCancellationSignalToProcessError::AlreayTriedToCancel)?;
 
         let cancel_channel_receiver = self
             .cancel_status_channel_receiver
             .take()
-            .ok_or(CancellationError::AlreayTriedToCancel)?;
+            .ok_or(SendingCancellationSignalToProcessError::AlreayTriedToCancel)?;
 
         tracing::debug!("Sending cancellation signal to process");
         cancel_channel_sender.send(()).map_err(|_| {
             tracing::warn!("Failed to send cancellation signal to process");
-            CancellationError::ProcessTerminated
+            SendingCancellationSignalToProcessError::ProcessTerminated
         })?;
 
         tracing::debug!("Waiting for process to terminate");
         let cencel_result = cancel_channel_receiver.await.map_err(|_| {
             tracing::warn!("Failed to wait for process to terminate");
-            CancellationError::ProcessTerminated
+            SendingCancellationSignalToProcessError::ProcessTerminated
         })?;
 
         tracing::debug!("Process terminated");
@@ -526,7 +528,7 @@ pub enum ProcessKillAndWaitError {
 
 /// An error that accures when trying to cancel a process
 #[derive(ThisError, Debug)]
-pub enum CancellationError {
+pub enum SendingCancellationSignalToProcessError {
     #[error("Process is not running")]
     ProcessNotRunning,
     #[error("Cancellation signal can only be sent once")]
@@ -738,7 +740,7 @@ mod tests {
         let task_handler = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_secs(5)).await;
             match controller.cancel().await {
-                Err(CancellationError::ProcessTerminated) => {}
+                Err(SendingCancellationSignalToProcessError::ProcessTerminated) => {}
                 result => panic!("Unexpected result: {:?}", result),
             }
         });
@@ -759,7 +761,7 @@ mod tests {
         process.run(args).await.expect("Error running process.");
 
         match controller.cancel().await {
-            Err(CancellationError::ProcessTerminated) => {}
+            Err(SendingCancellationSignalToProcessError::ProcessTerminated) => {}
             result => panic!("Unexpected result {:?}", result),
         }
     }
@@ -797,7 +799,7 @@ mod tests {
         let (_process, mut controller) = create_numbers_process();
 
         match controller.cancel().await {
-            Err(CancellationError::ProcessNotRunning) => {}
+            Err(SendingCancellationSignalToProcessError::ProcessNotRunning) => {}
             result => panic!("Unexpected result {:?}", result),
         }
     }
@@ -810,7 +812,7 @@ mod tests {
         drop(process);
 
         match controller.cancel().await {
-            Err(CancellationError::ProcessNotRunning) => {}
+            Err(SendingCancellationSignalToProcessError::ProcessNotRunning) => {}
             result => panic!("Unexpected result {:?}", result),
         }
     }
@@ -826,7 +828,7 @@ mod tests {
         drop(process);
 
         match controller.cancel().await {
-            Err(CancellationError::ProcessTerminated) => {}
+            Err(SendingCancellationSignalToProcessError::ProcessTerminated) => {}
             result => panic!("Unexpected result {:?}", result),
         }
     }
@@ -845,7 +847,7 @@ mod tests {
                 .expect("Error cancelling process.");
 
             match controller.cancel().await {
-                Err(CancellationError::ProcessTerminated) => {}
+                Err(SendingCancellationSignalToProcessError::ProcessTerminated) => {}
                 result => panic!("Unexpected result {:?}", result),
             }
         });

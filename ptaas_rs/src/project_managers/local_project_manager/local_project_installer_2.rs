@@ -1,6 +1,6 @@
 use crate::project_managers::process_2::{
-    CancellationError, KilledTerminationStatus, OsProcessArgs, Process, ProcessController,
-    ProcessKillAndWaitError, ProcessRunError, Status, TerminationStatus,
+    KilledTerminationStatus, OsProcessArgs, Process, ProcessController, ProcessKillAndWaitError,
+    ProcessRunError, SendingCancellationSignalToProcessError, Status, TerminationStatus,
     TerminationWithErrorStatus,
 };
 use std::path::PathBuf;
@@ -43,40 +43,66 @@ macro_rules! generate_process_run_result {
     };
 }
 
+#[derive(ThisError, Debug)]
+pub enum InstallerKillAndWaitError {
+    #[error("Failed to kill and wait for venv process: {0}")]
+    VenvKillAndWaitError(#[source] ProcessKillAndWaitError),
+    #[error("Failed to kill and wait for req process: {0}")]
+    ReqKillAndWaitError(#[source] ProcessKillAndWaitError),
+}
+
+#[derive(ThisError, Debug)]
+pub enum SendingCancellationSignalToInstallerError {
+    #[error("Failed to cancel venv process: {0}")]
+    VenvCancellationError(#[source] SendingCancellationSignalToProcessError),
+    #[error("Failed to cancel req process: {0}")]
+    ReqCancellationError(#[source] SendingCancellationSignalToProcessError),
+}
+
 pub struct LocalProjectInstallerController {
     venv_controller: ProcessController,
     req_controller: ProcessController,
 }
 
 impl LocalProjectInstallerController {
-    pub async fn cancel(&mut self) -> Result<(), ()> {
-        let venv_cancel_result: Result<Option<ProcessKillAndWaitError>, CancellationError> =
-            self.venv_controller.cancel().await;
-
-        match venv_cancel_result {
+    pub async fn cancel(
+        &mut self,
+    ) -> Result<Option<InstallerKillAndWaitError>, SendingCancellationSignalToInstallerError> {
+        match self.cancel_venv().await {
             Ok(option_kill_and_wait_error) => {
-                match option_kill_and_wait_error {
-                    Some(error) => {
-                        todo!()
-                    }
-                    None => {
-                        // all good
-                        todo!()
-                    }
-                }
+                Ok(option_kill_and_wait_error.map(InstallerKillAndWaitError::VenvKillAndWaitError))
             }
-            Err(cancellation_error) => match cancellation_error {
-                CancellationError::ProcessNotRunning => {
-                    todo!()
-                }
-                CancellationError::AlreayTriedToCancel => {
-                    todo!()
-                }
-                CancellationError::ProcessTerminated => {
-                    todo!()
-                }
-            },
+            Err(SendingCancellationSignalToProcessError::ProcessTerminated) => {
+                self.cancel_req_mapped().await
+            }
+            Err(cancellation_error) => Err(
+                SendingCancellationSignalToInstallerError::VenvCancellationError(
+                    cancellation_error,
+                ),
+            ),
         }
+    }
+
+    async fn cancel_venv(
+        &mut self,
+    ) -> Result<Option<ProcessKillAndWaitError>, SendingCancellationSignalToProcessError> {
+        self.venv_controller.cancel().await
+    }
+
+    async fn cancel_req(
+        &mut self,
+    ) -> Result<Option<ProcessKillAndWaitError>, SendingCancellationSignalToProcessError> {
+        self.req_controller.cancel().await
+    }
+
+    async fn cancel_req_mapped(
+        &mut self,
+    ) -> Result<Option<InstallerKillAndWaitError>, SendingCancellationSignalToInstallerError> {
+        Ok(self
+            .cancel_req()
+            .await
+            .map_err(SendingCancellationSignalToInstallerError::ReqCancellationError)?
+            .map(InstallerKillAndWaitError::ReqKillAndWaitError))
     }
 }
 
