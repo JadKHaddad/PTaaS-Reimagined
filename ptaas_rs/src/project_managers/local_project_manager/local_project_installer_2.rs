@@ -152,60 +152,80 @@ impl LocalProjectInstaller {
         )
     }
 
-    pub async fn check_and_run_installation(&mut self) -> Result<(), InstallError> {
-        self.check().await.map_err(StartInstallError::CheckFailed)?;
+    /// A 'check' function fails if the project is not valid.
+    /// Otherwise it returns Ok(()).
+    pub async fn check(&self) -> Result<(), ProjectCheckError> {
+        let uploaded_project_dir = &self.uploaded_project_dir;
 
+        let _ = Self::check_dir_exists_and_not_empty(uploaded_project_dir)
+            .await
+            .map_err(|err| ProjectCheckError::ProjectDir(err.into()))?;
+
+        self.check_requirements_txt_exists_and_locust_in_requirements_txt()
+            .await?;
+
+        self.check_locust_dir_exists_and_not_empty_and_contains_python_scripts()
+            .await
+            .map_err(ProjectCheckError::LocustDir)?;
+
+        Ok(())
+    }
+
+    pub async fn install(&mut self) -> Result<(), InstallError> {
         let uploaded_project_dir_str = self.uploaded_project_dir.to_str().ok_or(
-            StartInstallError::FailedToConvertPathBufToString(self.uploaded_project_dir.clone()),
+            InstallError::FailedToConvertPathBufToString(self.uploaded_project_dir.clone()),
         )?;
 
         let project_env_dir = &self.project_env_dir;
         let project_env_dir_str =
             project_env_dir
                 .to_str()
-                .ok_or(StartInstallError::FailedToConvertPathBufToString(
+                .ok_or(InstallError::FailedToConvertPathBufToString(
                     self.project_env_dir.clone(),
                 ))?;
 
         let requirements_file_path = self.get_requirements_file_path();
-        let requirements_file_path_str = requirements_file_path.to_str().ok_or(
-            StartInstallError::FailedToConvertPathBufToString(requirements_file_path.clone()),
-        )?;
+        let requirements_file_path_str =
+            requirements_file_path
+                .to_str()
+                .ok_or(InstallError::FailedToConvertPathBufToString(
+                    requirements_file_path.clone(),
+                ))?;
 
         let pip_path = self.create_os_specific_pip_path();
 
         let pip_path_str =
             pip_path
                 .to_str()
-                .ok_or(StartInstallError::FailedToConvertPathBufToString(
+                .ok_or(InstallError::FailedToConvertPathBufToString(
                     pip_path.clone(),
                 ))?;
 
         // create files and channels
         let venv_stdout_file_path = self.get_venv_out_file_path();
         let mut venv_stdout_file = File::create(&venv_stdout_file_path).await.map_err(|e| {
-            StartInstallError::VenvStartError(SubStartInstallError::CreateFileError(
+            InstallError::VenvStartError(SubStartInstallError::CreateFileError(
                 CreateFileError::CouldNotCreateFile(e, venv_stdout_file_path),
             ))
         })?;
 
         let venv_stderr_file_path = self.get_venv_err_file_path();
         let mut venv_stderr_file = File::create(&venv_stderr_file_path).await.map_err(|e| {
-            StartInstallError::VenvStartError(SubStartInstallError::CreateFileError(
+            InstallError::VenvStartError(SubStartInstallError::CreateFileError(
                 CreateFileError::CouldNotCreateFile(e, venv_stderr_file_path),
             ))
         })?;
 
         let req_stdout_file_path = self.get_req_out_file_path();
         let mut req_stdout_file = File::create(&req_stdout_file_path).await.map_err(|e| {
-            StartInstallError::RequirementsStartError(SubStartInstallError::CreateFileError(
+            InstallError::RequirementsStartError(SubStartInstallError::CreateFileError(
                 CreateFileError::CouldNotCreateFile(e, req_stdout_file_path),
             ))
         })?;
 
         let req_stderr_file_path = self.get_req_err_file_path();
         let mut req_stderr_file = File::create(&req_stderr_file_path).await.map_err(|e| {
-            StartInstallError::RequirementsStartError(SubStartInstallError::CreateFileError(
+            InstallError::RequirementsStartError(SubStartInstallError::CreateFileError(
                 CreateFileError::CouldNotCreateFile(e, req_stderr_file_path),
             ))
         })?;
@@ -318,6 +338,18 @@ impl LocalProjectInstaller {
         Ok(())
     }
 
+    pub async fn check_and_install(&mut self) -> Result<(), CheckAndInstallError> {
+        self.check()
+            .await
+            .map_err(CheckAndInstallError::CheckError)?;
+
+        self.install()
+            .await
+            .map_err(CheckAndInstallError::InstallError)?;
+
+        Ok(())
+    }
+
     async fn delete_environment_dir_if_exists(
         &self,
     ) -> Result<Vec<IoError>, DeleteEnvironmentDirError> {
@@ -372,25 +404,6 @@ impl LocalProjectInstaller {
 
     pub async fn get_req_err_from_file(&self) -> Result<String, IoError> {
         fs::read_to_string(self.get_req_err_file_path()).await
-    }
-
-    /// A 'check' function fails if the project is not valid.
-    /// Otherwise it returns Ok(()).
-    async fn check(&self) -> Result<(), ProjectCheckError> {
-        let uploaded_project_dir = &self.uploaded_project_dir;
-
-        let _ = Self::check_dir_exists_and_not_empty(uploaded_project_dir)
-            .await
-            .map_err(|err| ProjectCheckError::ProjectDir(err.into()))?;
-
-        self.check_requirements_txt_exists_and_locust_in_requirements_txt()
-            .await?;
-
-        self.check_locust_dir_exists_and_not_empty_and_contains_python_scripts()
-            .await
-            .map_err(ProjectCheckError::LocustDir)?;
-
-        Ok(())
     }
 
     async fn check_dir_exists_and_not_empty(
@@ -487,7 +500,7 @@ impl LocalProjectInstaller {
         error: ErrorThatTriggersCleanUp,
     ) -> InstallError {
         match self.clean_up_on_error().await {
-            Ok(_) => StartInstallError::ErrorThatTriggersCleanUp(error).into(),
+            Ok(_) => InstallError::ErrorThatTriggersCleanUp(error),
             Err(clean_up_error) => InstallError::CleanUpError(error, clean_up_error),
         }
     }
@@ -556,18 +569,6 @@ pub enum LocustDirError {
 }
 
 #[derive(ThisError, Debug)]
-pub enum InstallError {
-    #[error("Could not start install: {0}")]
-    StartInstallError(
-        #[from]
-        #[source]
-        StartInstallError,
-    ),
-    #[error("An error occurred: {0}, and could not clean up: {1}")]
-    CleanUpError(ErrorThatTriggersCleanUp, #[source] CleanUpError),
-}
-
-#[derive(ThisError, Debug)]
 pub enum SubStartInstallError {
     #[error("Error creating file: {0}")]
     CreateFileError(
@@ -594,15 +595,25 @@ pub enum SubInstallError {
 }
 
 #[derive(ThisError, Debug)]
-pub enum StartInstallError {
-    #[error("Could not convert path buf to string: {0}")]
-    FailedToConvertPathBufToString(PathBuf),
+pub enum CheckAndInstallError {
     #[error("Project is not valid: {0}")]
-    CheckFailed(
+    CheckError(
         #[from]
         #[source]
         ProjectCheckError,
     ),
+    #[error("Failed to install project: {0}")]
+    InstallError(
+        #[from]
+        #[source]
+        InstallError,
+    ),
+}
+
+#[derive(ThisError, Debug)]
+pub enum InstallError {
+    #[error("Could not convert path buf to string: {0}")]
+    FailedToConvertPathBufToString(PathBuf),
     #[error("Virtual environment installation can not be started: {0}")]
     VenvStartError(#[source] SubStartInstallError),
     #[error("Requirements installation can not be started: {0}")]
@@ -613,6 +624,8 @@ pub enum StartInstallError {
         #[source]
         ErrorThatTriggersCleanUp,
     ),
+    #[error("An error occurred: {0}, and could not clean up: {1}")]
+    CleanUpError(ErrorThatTriggersCleanUp, #[source] CleanUpError),
 }
 
 #[derive(ThisError, Debug)]
@@ -778,7 +791,7 @@ mod tests {
                 None,
             );
 
-            if let Err(e) = installer.check_and_run_installation().await {
+            if let Err(e) = installer.check_and_install().await {
                 panic!("Unexpected error: {}", e);
             }
 
