@@ -724,7 +724,7 @@ async fn remove_dir_all_with_max_attempts_and_delay(
     Err(MaxAttemptsExceeded(errors))
 }
 
-// #[cfg(test)]
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::path::Path;
@@ -760,6 +760,160 @@ mod tests {
             .expect("Could not restore .gitkeep");
     }
 
+    fn create_installer_and_process_from_project_path(
+        project_id_and_dir: String,
+    ) -> (LocalProjectInstaller, LocalProjectInstallerController) {
+        let uploaded_project_dir = get_uploaded_projects_dir().join(&project_id_and_dir);
+        let installed_project_dir = get_installed_projects_dir().join(&project_id_and_dir);
+        let project_env_dir = get_environments_dir().join(&project_id_and_dir);
+
+        LocalProjectInstaller::new(
+            project_id_and_dir,
+            uploaded_project_dir,
+            installed_project_dir,
+            project_env_dir,
+            None,
+            None,
+        )
+    }
+
+    mod check_projects {
+        use super::*;
+
+        #[tokio::test]
+        #[traced_test]
+        pub async fn fail_on_project_dir_does_not_exist() {
+            let project_id_and_dir = String::from("project_dir_does_not_exist");
+            let (installer, _controller) =
+                create_installer_and_process_from_project_path(project_id_and_dir);
+
+            let result = installer.check().await;
+            match result {
+                Err(ProjectCheckError::ProjectDir(ProjectDirError::ProjectDirDoesNotExist)) => {}
+                _ => panic!("Unexpected result: {:?}", result),
+            }
+        }
+
+        #[tokio::test]
+        #[traced_test]
+        pub async fn fail_on_project_dir_is_empty() {
+            let project_id_and_dir = String::from("empty");
+            let (installer, _controller) =
+                create_installer_and_process_from_project_path(project_id_and_dir.clone());
+
+            delete_gitkeep(&get_uploaded_projects_dir().join(&project_id_and_dir)).await;
+
+            let result = installer.check().await;
+            let panic_msg = match result {
+                Err(ProjectCheckError::ProjectDir(ProjectDirError::ProjectDirIsEmpty)) => None,
+                _ => Some(format!("Unexpected result: {:?}", result)),
+            };
+
+            restore_gitkeep(&get_uploaded_projects_dir().join(&project_id_and_dir)).await;
+
+            if let Some(msg) = panic_msg {
+                panic!("{}", msg);
+            }
+        }
+
+        #[tokio::test]
+        #[traced_test]
+        pub async fn fail_on_requirements_does_not_exist() {
+            let project_id_and_dir = String::from("requirements_does_not_exist");
+            let (installer, _controller) =
+                create_installer_and_process_from_project_path(project_id_and_dir);
+
+            let result = installer.check().await;
+            match result {
+                Err(ProjectCheckError::Requirements(
+                    RequirementsError::RequirementsTxtDoesNotExist,
+                )) => {}
+                _ => panic!("Unexpected result: {:?}", result),
+            }
+        }
+
+        #[tokio::test]
+        #[traced_test]
+        pub async fn fail_on_requirements_does_not_contain_locust() {
+            let project_id_and_dir = String::from("requirements_does_not_contain_locust");
+            let (installer, _controller) =
+                create_installer_and_process_from_project_path(project_id_and_dir);
+
+            let result = installer.check().await;
+            match result {
+                Err(ProjectCheckError::Requirements(
+                    RequirementsError::LocustIsNotInRequirementsTxt,
+                )) => {}
+                _ => panic!("Unexpected result: {:?}", result),
+            }
+        }
+
+        #[tokio::test]
+        #[traced_test]
+        pub async fn fail_on_locust_dir_does_not_exist() {
+            let project_id_and_dir = String::from("locust_dir_does_not_exist");
+            let (installer, _controller) =
+                create_installer_and_process_from_project_path(project_id_and_dir);
+
+            let result = installer.check().await;
+            match result {
+                Err(ProjectCheckError::LocustDir(LocustDirError::LocustDirDoesNotExist)) => {}
+                _ => panic!("Unexpected result: {:?}", result),
+            }
+        }
+
+        #[tokio::test]
+        #[traced_test]
+        pub async fn fail_on_locust_dir_is_empty() {
+            let project_id_and_dir = String::from("locust_dir_is_empty");
+            let (installer, _controller) =
+                create_installer_and_process_from_project_path(project_id_and_dir);
+
+            let locust_dir = installer.get_locust_dir_path();
+            delete_gitkeep(&locust_dir).await;
+
+            let result = installer.check().await;
+            let panic_msg = match result {
+                Err(ProjectCheckError::LocustDir(LocustDirError::LocustDirIsEmpty)) => None,
+                _ => Some(format!("Unexpected result: {:?}", result)),
+            };
+
+            restore_gitkeep(&get_uploaded_projects_dir().join(&locust_dir)).await;
+
+            if let Some(msg) = panic_msg {
+                panic!("{}", msg);
+            }
+        }
+
+        #[tokio::test]
+        #[traced_test]
+        pub async fn fail_on_locust_dir_contains_no_python_files() {
+            let project_id_and_dir = String::from("locust_dir_is_contains_no_python_files");
+            let (installer, _controller) =
+                create_installer_and_process_from_project_path(project_id_and_dir);
+
+            let result = installer.check().await;
+            match result {
+                Err(ProjectCheckError::LocustDir(LocustDirError::NoPythonFilesInLocustDir)) => {}
+                _ => panic!("Unexpected result: {:?}", result),
+            }
+        }
+
+        #[tokio::test]
+        #[traced_test]
+        pub async fn check_a_valid_project_and_expect_no_errors() {
+            let project_id_and_dir = String::from("valid");
+            let (installer, _controller) =
+                create_installer_and_process_from_project_path(project_id_and_dir);
+
+            let result = installer.check().await;
+            match result {
+                Ok(_) => {}
+                _ => panic!("Unexpected result: {:?}", result),
+            }
+        }
+    }
+
     mod install_projects {
         use super::*;
 
@@ -768,21 +922,11 @@ mod tests {
         #[ignore = "Failing on CI for some reason"]
         pub async fn valid() {
             let project_id_and_dir = String::from("valid");
-            let uploaded_project_dir = get_uploaded_projects_dir().join(&project_id_and_dir);
-            let installed_project_dir = get_installed_projects_dir().join(&project_id_and_dir);
-            let project_env_dir = get_environments_dir().join(&project_id_and_dir);
-
-            let (mut installer, _controller) = LocalProjectInstaller::new(
-                project_id_and_dir,
-                uploaded_project_dir,
-                installed_project_dir,
-                project_env_dir,
-                None,
-                None,
-            );
+            let (mut installer, _controller) =
+                create_installer_and_process_from_project_path(project_id_and_dir);
 
             if let Err(e) = installer.check_and_install().await {
-                panic!("Unexpected error: {}", e);
+                panic!("Unexpected error: {:?}", e);
             }
 
             installer
