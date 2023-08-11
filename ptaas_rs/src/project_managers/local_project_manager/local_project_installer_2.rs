@@ -203,38 +203,38 @@ impl LocalProjectInstaller {
 
         // create files and channels
         let venv_stdout_file_path = self.get_venv_out_file_path();
-        let mut venv_stdout_file = File::create(&venv_stdout_file_path).await.map_err(|e| {
+        let venv_stdout_file = File::create(&venv_stdout_file_path).await.map_err(|e| {
             InstallError::VenvStartError(SubStartInstallError::CreateFileError(
                 CreateFileError::CouldNotCreateFile(e, venv_stdout_file_path),
             ))
         })?;
 
         let venv_stderr_file_path = self.get_venv_err_file_path();
-        let mut venv_stderr_file = File::create(&venv_stderr_file_path).await.map_err(|e| {
+        let venv_stderr_file = File::create(&venv_stderr_file_path).await.map_err(|e| {
             InstallError::VenvStartError(SubStartInstallError::CreateFileError(
                 CreateFileError::CouldNotCreateFile(e, venv_stderr_file_path),
             ))
         })?;
 
         let req_stdout_file_path = self.get_req_out_file_path();
-        let mut req_stdout_file = File::create(&req_stdout_file_path).await.map_err(|e| {
+        let req_stdout_file = File::create(&req_stdout_file_path).await.map_err(|e| {
             InstallError::RequirementsStartError(SubStartInstallError::CreateFileError(
                 CreateFileError::CouldNotCreateFile(e, req_stdout_file_path),
             ))
         })?;
 
         let req_stderr_file_path = self.get_req_err_file_path();
-        let mut req_stderr_file = File::create(&req_stderr_file_path).await.map_err(|e| {
+        let req_stderr_file = File::create(&req_stderr_file_path).await.map_err(|e| {
             InstallError::RequirementsStartError(SubStartInstallError::CreateFileError(
                 CreateFileError::CouldNotCreateFile(e, req_stderr_file_path),
             ))
         })?;
 
-        let (venv_stdout_sender, mut venv_stdout_receiver) = mpsc::channel::<String>(100);
-        let (venv_stderr_sender, mut venv_stderr_receiver) = mpsc::channel::<String>(100);
+        let (venv_stdout_sender, venv_stdout_receiver) = mpsc::channel::<String>(100);
+        let (venv_stderr_sender, venv_stderr_receiver) = mpsc::channel::<String>(100);
 
-        let (req_stdout_sender, mut req_stdout_receiver) = mpsc::channel::<String>(100);
-        let (req_stderr_sender, mut req_stderr_receiver) = mpsc::channel::<String>(100);
+        let (req_stdout_sender, req_stdout_receiver) = mpsc::channel::<String>(100);
+        let (req_stderr_sender, req_stderr_receiver) = mpsc::channel::<String>(100);
 
         // Create processes args
         let venv_process_args = OsProcessArgs {
@@ -255,36 +255,20 @@ impl LocalProjectInstaller {
 
         // do some channel magic for venv
         let stdout_sender = self.stdout_sender.clone();
-        tokio::spawn(async move {
-            while let Some(mut line) = venv_stdout_receiver.recv().await {
-                line.push('\n');
-                if let Err(err) = venv_stdout_file.write_all(line.as_bytes()).await {
-                    tracing::error!(%err, io_name="venv_stout", "Failed to write to file");
-                    break;
-                }
-                if let Some(sender) = &stdout_sender {
-                    if let Err(err) = sender.send(line).await {
-                        tracing::error!(%err, io_name="venv_stout", "Failed to send line to sender");
-                    }
-                }
-            }
-        });
+        Self::do_forward_io_and_write_to_file(
+            stdout_sender,
+            venv_stdout_receiver,
+            venv_stdout_file,
+            "venv_stdout",
+        );
 
         let stderr_sender = self.stderr_sender.clone();
-        tokio::spawn(async move {
-            while let Some(mut line) = venv_stderr_receiver.recv().await {
-                line.push('\n');
-                if let Err(err) = venv_stderr_file.write_all(line.as_bytes()).await {
-                    tracing::error!(%err, io_name="venv_sterr", "Failed to write to file");
-                    break;
-                }
-                if let Some(sender) = &stderr_sender {
-                    if let Err(err) = sender.send(line).await {
-                        tracing::error!(%err, io_name="venv_sterr", "Failed to send line to sender");
-                    }
-                }
-            }
-        });
+        Self::do_forward_io_and_write_to_file(
+            stderr_sender,
+            venv_stderr_receiver,
+            venv_stderr_file,
+            "venv_sterr",
+        );
 
         let venv_process_result = self.venv_process.run(venv_process_args).await;
         let venv_process_run_result =
@@ -296,36 +280,20 @@ impl LocalProjectInstaller {
 
         // do some channel magic for req
         let stdout_sender = self.stdout_sender.clone();
-        tokio::spawn(async move {
-            while let Some(mut line) = req_stdout_receiver.recv().await {
-                line.push('\n');
-                if let Err(err) = req_stdout_file.write_all(line.as_bytes()).await {
-                    tracing::error!(%err, io_name="req_stdout", "Failed to write to file");
-                    break;
-                }
-                if let Some(sender) = &stdout_sender {
-                    if let Err(err) = sender.send(line).await {
-                        tracing::error!(%err, io_name="req_stdout", "Failed to send line to sender");
-                    }
-                }
-            }
-        });
+        Self::do_forward_io_and_write_to_file(
+            stdout_sender,
+            req_stdout_receiver,
+            req_stdout_file,
+            "req_stdout",
+        );
 
         let stderr_sender = self.stderr_sender.clone();
-        tokio::spawn(async move {
-            while let Some(mut line) = req_stderr_receiver.recv().await {
-                line.push('\n');
-                if let Err(err) = req_stderr_file.write_all(line.as_bytes()).await {
-                    tracing::error!(%err, io_name="req_stderr", "Failed to write to file");
-                    break;
-                }
-                if let Some(sender) = &stderr_sender {
-                    if let Err(err) = sender.send(line).await {
-                        tracing::error!(%err, io_name="req_stderr", "Failed to send line to sender");
-                    }
-                }
-            }
-        });
+        Self::do_forward_io_and_write_to_file(
+            stderr_sender,
+            req_stderr_receiver,
+            req_stderr_file,
+            "req_stderr",
+        );
 
         let req_process_result = self.req_process.run(req_process_args).await;
         let req_process_run_result =
@@ -348,6 +316,28 @@ impl LocalProjectInstaller {
             .map_err(CheckAndInstallError::InstallError)?;
 
         Ok(())
+    }
+
+    fn do_forward_io_and_write_to_file(
+        sender_to_forward_to: Option<mpsc::Sender<String>>,
+        mut receiver: mpsc::Receiver<String>,
+        mut file: File,
+        io_name: &'static str,
+    ) {
+        tokio::spawn(async move {
+            while let Some(mut line) = receiver.recv().await {
+                line.push('\n');
+                if let Err(err) = file.write_all(line.as_bytes()).await {
+                    tracing::error!(%err, io_name, "Failed to write to file");
+                    break;
+                }
+                if let Some(sender) = &sender_to_forward_to {
+                    if let Err(err) = sender.send(line).await {
+                        tracing::error!(%err, io_name, "Failed to send line to sender");
+                    }
+                }
+            }
+        });
     }
 
     async fn delete_environment_dir_if_exists(
