@@ -919,6 +919,90 @@ mod tests {
 
         #[tokio::test]
         #[traced_test]
+        pub async fn fail_on_invalid_requirements_with_exit_code_1() {
+            let project_id_and_dir = String::from("invalid_requirements");
+            let (mut installer, _controller) =
+                create_installer_and_process_from_project_path(project_id_and_dir);
+
+            let result = installer.check_and_install().await;
+
+            let venv_err = installer
+                .get_venv_err_from_file()
+                .await
+                .expect("Could not get venv err");
+            println!("venv_err: {}", venv_err);
+
+            let req_err = installer
+                .get_req_err_from_file()
+                .await
+                .expect("Could not get req err");
+            println!("req_err: {}", req_err);
+
+            match result {
+                Err(CheckAndInstallError::InstallError(
+                    InstallError::ErrorThatTriggersCleanUp(
+                        ErrorThatTriggersCleanUp::RequirementsInstallError(
+                            SubInstallError::TerminatedWithError(
+                                TerminationWithErrorStatus::TerminatedWithErrorCode(code),
+                            ),
+                        ),
+                    ),
+                )) => {
+                    assert_eq!(code, 1);
+                }
+                _ => panic!("Unexpected result: {:?}", result),
+            }
+        }
+
+        #[tokio::test]
+        #[traced_test]
+        pub async fn kill_installation_and_expect_killed() {
+            let project_id_and_dir = String::from("valid");
+            let (mut installer, mut controller) =
+                create_installer_and_process_from_project_path(project_id_and_dir);
+
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                let cancel_result = controller.cancel().await;
+                match cancel_result {
+                    Ok(None) => {}
+                    _ => panic!("Unexpected cancel result: {:?}", cancel_result),
+                }
+            });
+
+            let result = installer.check_and_install().await;
+
+            let venv_err = installer
+                .get_venv_err_from_file()
+                .await
+                .expect("Could not get venv err");
+            println!("venv_err: {}", venv_err);
+
+            let req_err = installer
+                .get_req_err_from_file()
+                .await
+                .expect("Could not get req err");
+            println!("req_err: {}", req_err);
+
+            match result {
+                Err(CheckAndInstallError::InstallError(
+                    InstallError::ErrorThatTriggersCleanUp(
+                        ErrorThatTriggersCleanUp::RequirementsInstallError(
+                            SubInstallError::Killed(_),
+                        ),
+                    ),
+                )) => {}
+                Err(CheckAndInstallError::InstallError(
+                    InstallError::ErrorThatTriggersCleanUp(
+                        ErrorThatTriggersCleanUp::VenvInstallError(SubInstallError::Killed(_)),
+                    ),
+                )) => {}
+                _ => panic!("Unexpected result: {:?}", result),
+            }
+        }
+
+        #[tokio::test]
+        #[traced_test]
         #[ignore = "Failing on CI for some reason"]
         pub async fn valid() {
             let project_id_and_dir = String::from("valid");
