@@ -113,6 +113,17 @@ struct IoFiles {
     req_stderr_file: File,
 }
 
+struct IoChannels {
+    venv_stdout_sender: mpsc::Sender<String>,
+    venv_stdout_receiver: mpsc::Receiver<String>,
+    venv_stderr_sender: mpsc::Sender<String>,
+    venv_stderr_receiver: mpsc::Receiver<String>,
+    req_stdout_sender: mpsc::Sender<String>,
+    req_stdout_receiver: mpsc::Receiver<String>,
+    req_stderr_sender: mpsc::Sender<String>,
+    req_stderr_receiver: mpsc::Receiver<String>,
+}
+
 pub struct LocalProjectInstaller {
     id: String,
     uploaded_project_dir: PathBuf,
@@ -215,11 +226,16 @@ impl LocalProjectInstaller {
             req_stderr_file,
         } = self.create_io_files().await?;
 
-        let (venv_stdout_sender, venv_stdout_receiver) = mpsc::channel::<String>(100);
-        let (venv_stderr_sender, venv_stderr_receiver) = mpsc::channel::<String>(100);
-
-        let (req_stdout_sender, req_stdout_receiver) = mpsc::channel::<String>(100);
-        let (req_stderr_sender, req_stderr_receiver) = mpsc::channel::<String>(100);
+        let IoChannels {
+            venv_stdout_sender,
+            venv_stdout_receiver,
+            venv_stderr_sender,
+            venv_stderr_receiver,
+            req_stdout_sender,
+            req_stdout_receiver,
+            req_stderr_sender,
+            req_stderr_receiver,
+        } = Self::create_io_channels();
 
         // Create processes args
         let venv_process_args = OsProcessArgs {
@@ -530,6 +546,24 @@ impl LocalProjectInstaller {
             req_stdout_file,
             req_stderr_file,
         })
+    }
+
+    fn create_io_channels() -> IoChannels {
+        let (venv_stdout_sender, venv_stdout_receiver) = mpsc::channel::<String>(100);
+        let (venv_stderr_sender, venv_stderr_receiver) = mpsc::channel::<String>(100);
+        let (req_stdout_sender, req_stdout_receiver) = mpsc::channel::<String>(100);
+        let (req_stderr_sender, req_stderr_receiver) = mpsc::channel::<String>(100);
+
+        IoChannels {
+            venv_stdout_sender,
+            venv_stdout_receiver,
+            venv_stderr_sender,
+            venv_stderr_receiver,
+            req_stdout_sender,
+            req_stdout_receiver,
+            req_stderr_sender,
+            req_stderr_receiver,
+        }
     }
 }
 
