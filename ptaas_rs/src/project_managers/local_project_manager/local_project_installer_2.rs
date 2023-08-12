@@ -3,61 +3,17 @@ use crate::project_managers::process_2::{
     ProcessRunError, SendingCancellationSignalToProcessError, Status, TerminationStatus,
     TerminationWithErrorStatus,
 };
-use std::path::PathBuf;
-use std::time::Duration;
-use std::{io::Error as IoError, path::Path};
+use std::{
+    io::Error as IoError,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use thiserror::Error as ThisError;
-use tokio::fs::{self, File, ReadDir};
-use tokio::io::AsyncWriteExt;
-use tokio::sync::mpsc;
-
-macro_rules! generate_process_run_result {
-    ($process_run_result:ident, $error_that_triggers_cleanup_variant:ident) => {
-        match $process_run_result {
-            Ok(status) => match status {
-                Status::Terminated(term_status) => match term_status {
-                    TerminationStatus::TerminatedSuccessfully => Ok(()),
-                    TerminationStatus::Killed(killed_term_status) => Err(
-                        ErrorThatTriggersCleanUp::$error_that_triggers_cleanup_variant(
-                            SubInstallError::Killed(killed_term_status),
-                        ),
-                    ),
-                    TerminationStatus::TerminatedWithError(term_with_error_status) => Err(
-                        ErrorThatTriggersCleanUp::$error_that_triggers_cleanup_variant(
-                            SubInstallError::TerminatedWithError(term_with_error_status),
-                        ),
-                    ),
-                },
-                _ => Err(
-                    ErrorThatTriggersCleanUp::$error_that_triggers_cleanup_variant(
-                        SubInstallError::UnexpectedStatus(status),
-                    ),
-                ),
-            },
-            Err(error) => Err(
-                ErrorThatTriggersCleanUp::$error_that_triggers_cleanup_variant(
-                    SubInstallError::RunError(error),
-                ),
-            ),
-        }
-    };
-}
-
-#[derive(ThisError, Debug)]
-pub enum InstallerKillAndWaitError {
-    #[error("Failed to kill and wait for venv process: {0}")]
-    VenvKillAndWaitError(#[source] ProcessKillAndWaitError),
-    #[error("Failed to kill and wait for req process: {0}")]
-    ReqKillAndWaitError(#[source] ProcessKillAndWaitError),
-}
-
-#[derive(ThisError, Debug)]
-pub enum SendingCancellationSignalToInstallerError {
-    #[error("Failed to cancel venv process: {0}")]
-    VenvCancellationError(#[source] SendingCancellationSignalToProcessError),
-    #[error("Failed to cancel req process: {0}")]
-    ReqCancellationError(#[source] SendingCancellationSignalToProcessError),
-}
+use tokio::{
+    fs::{self, File, ReadDir},
+    io::AsyncWriteExt,
+    sync::mpsc,
+};
 
 pub struct LocalProjectInstallerController {
     venv_controller: ProcessController,
@@ -106,22 +62,52 @@ impl LocalProjectInstallerController {
     }
 }
 
-struct IoFiles {
-    venv_stdout_file: File,
-    venv_stderr_file: File,
-    req_stdout_file: File,
-    req_stderr_file: File,
+#[derive(ThisError, Debug)]
+pub enum InstallerKillAndWaitError {
+    #[error("Failed to kill and wait for venv process: {0}")]
+    VenvKillAndWaitError(#[source] ProcessKillAndWaitError),
+    #[error("Failed to kill and wait for req process: {0}")]
+    ReqKillAndWaitError(#[source] ProcessKillAndWaitError),
 }
 
-struct IoChannels {
-    venv_stdout_sender: mpsc::Sender<String>,
-    venv_stdout_receiver: mpsc::Receiver<String>,
-    venv_stderr_sender: mpsc::Sender<String>,
-    venv_stderr_receiver: mpsc::Receiver<String>,
-    req_stdout_sender: mpsc::Sender<String>,
-    req_stdout_receiver: mpsc::Receiver<String>,
-    req_stderr_sender: mpsc::Sender<String>,
-    req_stderr_receiver: mpsc::Receiver<String>,
+#[derive(ThisError, Debug)]
+pub enum SendingCancellationSignalToInstallerError {
+    #[error("Failed to cancel venv process: {0}")]
+    VenvCancellationError(#[source] SendingCancellationSignalToProcessError),
+    #[error("Failed to cancel req process: {0}")]
+    ReqCancellationError(#[source] SendingCancellationSignalToProcessError),
+}
+
+macro_rules! generate_process_run_result {
+    ($process_run_result:ident, $error_that_triggers_cleanup_variant:ident) => {
+        match $process_run_result {
+            Ok(status) => match status {
+                Status::Terminated(term_status) => match term_status {
+                    TerminationStatus::TerminatedSuccessfully => Ok(()),
+                    TerminationStatus::Killed(killed_term_status) => Err(
+                        ErrorThatTriggersCleanUp::$error_that_triggers_cleanup_variant(
+                            SubInstallError::Killed(killed_term_status),
+                        ),
+                    ),
+                    TerminationStatus::TerminatedWithError(term_with_error_status) => Err(
+                        ErrorThatTriggersCleanUp::$error_that_triggers_cleanup_variant(
+                            SubInstallError::TerminatedWithError(term_with_error_status),
+                        ),
+                    ),
+                },
+                _ => Err(
+                    ErrorThatTriggersCleanUp::$error_that_triggers_cleanup_variant(
+                        SubInstallError::UnexpectedStatus(status),
+                    ),
+                ),
+            },
+            Err(error) => Err(
+                ErrorThatTriggersCleanUp::$error_that_triggers_cleanup_variant(
+                    SubInstallError::RunError(error),
+                ),
+            ),
+        }
+    };
 }
 
 pub struct LocalProjectInstaller {
@@ -189,35 +175,21 @@ impl LocalProjectInstaller {
         Ok(())
     }
 
-    pub async fn install(&mut self) -> Result<(), InstallError> {
-        let uploaded_project_dir_str = self.uploaded_project_dir.to_str().ok_or(
-            InstallError::FailedToConvertPathBufToString(self.uploaded_project_dir.clone()),
-        )?;
+    fn path_to_str_mapped_error(path: &Path) -> Result<&str, InstallError> {
+        path.to_str()
+            .ok_or(InstallError::FailedToConvertPathBufToString(path.into()))
+    }
 
-        let project_env_dir = &self.project_env_dir;
-        let project_env_dir_str =
-            project_env_dir
-                .to_str()
-                .ok_or(InstallError::FailedToConvertPathBufToString(
-                    self.project_env_dir.clone(),
-                ))?;
+    pub async fn install(&mut self) -> Result<(), InstallError> {
+        let uploaded_project_dir_str = Self::path_to_str_mapped_error(&self.uploaded_project_dir)?;
+
+        let project_env_dir_str = Self::path_to_str_mapped_error(&self.project_env_dir)?;
 
         let requirements_file_path = self.get_requirements_file_path();
-        let requirements_file_path_str =
-            requirements_file_path
-                .to_str()
-                .ok_or(InstallError::FailedToConvertPathBufToString(
-                    requirements_file_path.clone(),
-                ))?;
+        let requirements_file_path_str = Self::path_to_str_mapped_error(&requirements_file_path)?;
 
         let pip_path = self.create_os_specific_pip_path();
-
-        let pip_path_str =
-            pip_path
-                .to_str()
-                .ok_or(InstallError::FailedToConvertPathBufToString(
-                    pip_path.clone(),
-                ))?;
+        let pip_path_str = Self::path_to_str_mapped_error(&pip_path)?;
 
         let IoFiles {
             venv_stdout_file,
@@ -237,7 +209,17 @@ impl LocalProjectInstaller {
             req_stderr_receiver,
         } = Self::create_io_channels();
 
-        // Create processes args
+        Self::do_forward_ios_and_write_to_files(IoForwardArgs {
+            stdout_sender: self.stdout_sender.clone(),
+            stderr_sender: self.stderr_sender.clone(),
+            stdout_receiver: venv_stdout_receiver,
+            stdout_file: venv_stdout_file,
+            stderr_receiver: venv_stderr_receiver,
+            stderr_file: venv_stderr_file,
+            stdout_name: "venv_stdout",
+            stderr_name: "venv_stderr",
+        });
+
         let venv_process_args = OsProcessArgs {
             program: "python3",
             args: vec!["-m", "venv", project_env_dir_str],
@@ -245,31 +227,6 @@ impl LocalProjectInstaller {
             stdout_sender: Some(venv_stdout_sender),
             stderr_sender: Some(venv_stderr_sender),
         };
-
-        let req_process_args = OsProcessArgs {
-            program: pip_path_str,
-            args: vec!["install", "-r", requirements_file_path_str],
-            current_dir: uploaded_project_dir_str,
-            stdout_sender: Some(req_stdout_sender),
-            stderr_sender: Some(req_stderr_sender),
-        };
-
-        // do some channel magic for venv
-        let stdout_sender = self.stdout_sender.clone();
-        Self::do_forward_io_and_write_to_file(
-            stdout_sender,
-            venv_stdout_receiver,
-            venv_stdout_file,
-            "venv_stdout",
-        );
-
-        let stderr_sender = self.stderr_sender.clone();
-        Self::do_forward_io_and_write_to_file(
-            stderr_sender,
-            venv_stderr_receiver,
-            venv_stderr_file,
-            "venv_stderr",
-        );
 
         let venv_process_result = self.venv_process.run(venv_process_args).await;
         let venv_process_run_result =
@@ -279,22 +236,24 @@ impl LocalProjectInstaller {
             return Err(self.clean_up_on_error_and_return_error(error).await);
         }
 
-        // do some channel magic for req
-        let stdout_sender = self.stdout_sender.clone();
-        Self::do_forward_io_and_write_to_file(
-            stdout_sender,
-            req_stdout_receiver,
-            req_stdout_file,
-            "req_stdout",
-        );
+        Self::do_forward_ios_and_write_to_files(IoForwardArgs {
+            stdout_sender: self.stdout_sender.clone(),
+            stderr_sender: self.stderr_sender.clone(),
+            stdout_receiver: req_stdout_receiver,
+            stdout_file: req_stdout_file,
+            stderr_receiver: req_stderr_receiver,
+            stderr_file: req_stderr_file,
+            stdout_name: "req_stdout",
+            stderr_name: "req_stderr",
+        });
 
-        let stderr_sender = self.stderr_sender.clone();
-        Self::do_forward_io_and_write_to_file(
-            stderr_sender,
-            req_stderr_receiver,
-            req_stderr_file,
-            "req_stderr",
-        );
+        let req_process_args = OsProcessArgs {
+            program: pip_path_str,
+            args: vec!["install", "-r", requirements_file_path_str],
+            current_dir: uploaded_project_dir_str,
+            stdout_sender: Some(req_stdout_sender),
+            stderr_sender: Some(req_stderr_sender),
+        };
 
         let req_process_result = self.req_process.run(req_process_args).await;
         let req_process_run_result =
@@ -339,6 +298,22 @@ impl LocalProjectInstaller {
                 }
             }
         });
+    }
+
+    fn do_forward_ios_and_write_to_files(args: IoForwardArgs) {
+        Self::do_forward_io_and_write_to_file(
+            args.stdout_sender,
+            args.stdout_receiver,
+            args.stdout_file,
+            args.stdout_name,
+        );
+
+        Self::do_forward_io_and_write_to_file(
+            args.stderr_sender,
+            args.stderr_receiver,
+            args.stderr_file,
+            args.stderr_name,
+        );
     }
 
     async fn delete_environment_dir_if_exists(
@@ -749,8 +724,6 @@ impl From<DirExistsAndNotEmptyError> for LocustDirError {
 pub enum CreateFileError {
     #[error("Could not create file: {0} {1}")]
     CouldNotCreateFile(#[source] IoError, PathBuf),
-    #[error("Could not convert path buf to string: {0}")]
-    FailedToConvertPathBufToString(PathBuf),
 }
 
 #[derive(ThisError, Debug)]
@@ -767,6 +740,35 @@ pub enum DeleteEnvironmentDirError {
         #[from]
         MaxAttemptsExceeded,
     ),
+}
+
+struct IoFiles {
+    venv_stdout_file: File,
+    venv_stderr_file: File,
+    req_stdout_file: File,
+    req_stderr_file: File,
+}
+
+struct IoChannels {
+    venv_stdout_sender: mpsc::Sender<String>,
+    venv_stdout_receiver: mpsc::Receiver<String>,
+    venv_stderr_sender: mpsc::Sender<String>,
+    venv_stderr_receiver: mpsc::Receiver<String>,
+    req_stdout_sender: mpsc::Sender<String>,
+    req_stdout_receiver: mpsc::Receiver<String>,
+    req_stderr_sender: mpsc::Sender<String>,
+    req_stderr_receiver: mpsc::Receiver<String>,
+}
+
+struct IoForwardArgs {
+    stdout_sender: Option<mpsc::Sender<String>>,
+    stderr_sender: Option<mpsc::Sender<String>>,
+    stdout_receiver: mpsc::Receiver<String>,
+    stdout_file: File,
+    stderr_receiver: mpsc::Receiver<String>,
+    stderr_file: File,
+    stdout_name: &'static str,
+    stderr_name: &'static str,
 }
 
 #[derive(ThisError, Debug)]
