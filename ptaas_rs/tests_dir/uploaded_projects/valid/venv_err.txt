@@ -1,0 +1,1 @@
+Error: Command '['C:\\Users\\JadKHaddad\\Desktop\\Projects\\PTaaS-Reimagined\\ptaas_rs\\tests_dir\\environments\\valid\\Scripts\\python.exe', '-m', 'ensurepip', '--upgrade', '--default-pip']' returned non-zero exit status 106.

@@ -106,6 +106,13 @@ impl LocalProjectInstallerController {
     }
 }
 
+struct IoFiles {
+    venv_stdout_file: File,
+    venv_stderr_file: File,
+    req_stdout_file: File,
+    req_stderr_file: File,
+}
+
 pub struct LocalProjectInstaller {
     id: String,
     uploaded_project_dir: PathBuf,
@@ -201,34 +208,12 @@ impl LocalProjectInstaller {
                     pip_path.clone(),
                 ))?;
 
-        // create files and channels
-        let venv_stdout_file_path = self.get_venv_out_file_path();
-        let venv_stdout_file = File::create(&venv_stdout_file_path).await.map_err(|e| {
-            InstallError::VenvStartError(SubStartInstallError::CreateFileError(
-                CreateFileError::CouldNotCreateFile(e, venv_stdout_file_path),
-            ))
-        })?;
-
-        let venv_stderr_file_path = self.get_venv_err_file_path();
-        let venv_stderr_file = File::create(&venv_stderr_file_path).await.map_err(|e| {
-            InstallError::VenvStartError(SubStartInstallError::CreateFileError(
-                CreateFileError::CouldNotCreateFile(e, venv_stderr_file_path),
-            ))
-        })?;
-
-        let req_stdout_file_path = self.get_req_out_file_path();
-        let req_stdout_file = File::create(&req_stdout_file_path).await.map_err(|e| {
-            InstallError::RequirementsStartError(SubStartInstallError::CreateFileError(
-                CreateFileError::CouldNotCreateFile(e, req_stdout_file_path),
-            ))
-        })?;
-
-        let req_stderr_file_path = self.get_req_err_file_path();
-        let req_stderr_file = File::create(&req_stderr_file_path).await.map_err(|e| {
-            InstallError::RequirementsStartError(SubStartInstallError::CreateFileError(
-                CreateFileError::CouldNotCreateFile(e, req_stderr_file_path),
-            ))
-        })?;
+        let IoFiles {
+            venv_stdout_file,
+            venv_stderr_file,
+            req_stdout_file,
+            req_stderr_file,
+        } = self.create_io_files().await?;
 
         let (venv_stdout_sender, venv_stdout_receiver) = mpsc::channel::<String>(100);
         let (venv_stderr_sender, venv_stderr_receiver) = mpsc::channel::<String>(100);
@@ -267,7 +252,7 @@ impl LocalProjectInstaller {
             stderr_sender,
             venv_stderr_receiver,
             venv_stderr_file,
-            "venv_sterr",
+            "venv_stderr",
         );
 
         let venv_process_result = self.venv_process.run(venv_process_args).await;
@@ -493,6 +478,58 @@ impl LocalProjectInstaller {
             Ok(_) => InstallError::ErrorThatTriggersCleanUp(error),
             Err(clean_up_error) => InstallError::CleanUpError(error, clean_up_error),
         }
+    }
+
+    async fn create_file(&self, path: &Path) -> Result<File, CreateFileError> {
+        File::create(&path)
+            .await
+            .map_err(|e| CreateFileError::CouldNotCreateFile(e, path.into()))
+    }
+
+    async fn create_venv_file(&self, path: &Path) -> Result<File, InstallError> {
+        self.create_file(path)
+            .await
+            .map_err(|e| InstallError::VenvStartError(SubStartInstallError::CreateFileError(e)))
+    }
+
+    async fn create_req_file(&self, path: &Path) -> Result<File, InstallError> {
+        self.create_file(path).await.map_err(|e| {
+            InstallError::RequirementsStartError(SubStartInstallError::CreateFileError(e))
+        })
+    }
+
+    async fn create_venv_stdout_file(&self) -> Result<File, InstallError> {
+        let venv_stdout_file_path = self.get_venv_out_file_path();
+        self.create_venv_file(&venv_stdout_file_path).await
+    }
+
+    async fn create_venv_stderr_file(&self) -> Result<File, InstallError> {
+        let venv_stderr_file_path = self.get_venv_err_file_path();
+        self.create_venv_file(&venv_stderr_file_path).await
+    }
+
+    async fn create_req_stdout_file(&self) -> Result<File, InstallError> {
+        let req_stdout_file_path = self.get_req_out_file_path();
+        self.create_req_file(&req_stdout_file_path).await
+    }
+
+    async fn create_req_stderr_file(&self) -> Result<File, InstallError> {
+        let req_stderr_file_path = self.get_req_err_file_path();
+        self.create_req_file(&req_stderr_file_path).await
+    }
+
+    async fn create_io_files(&self) -> Result<IoFiles, InstallError> {
+        let venv_stdout_file = self.create_venv_stdout_file().await?;
+        let venv_stderr_file = self.create_venv_stderr_file().await?;
+        let req_stdout_file = self.create_req_stdout_file().await?;
+        let req_stderr_file = self.create_req_stderr_file().await?;
+
+        Ok(IoFiles {
+            venv_stdout_file,
+            venv_stderr_file,
+            req_stdout_file,
+            req_stderr_file,
+        })
     }
 }
 
@@ -1003,7 +1040,6 @@ mod tests {
 
         #[tokio::test]
         #[traced_test]
-        // #[ignore = "Failing on CI for some reason"]
         pub async fn valid() {
             let project_id_and_dir = String::from("valid");
             let (mut installer, _controller) =
