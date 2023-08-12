@@ -1,7 +1,10 @@
-use crate::project_managers::process_2::{
-    KilledTerminationStatus, OsProcessArgs, Process, ProcessController, ProcessKillAndWaitError,
-    ProcessRunError, SendingCancellationSignalToProcessError, Status, TerminationStatus,
-    TerminationWithErrorStatus,
+use crate::{
+    project_managers::process_2::{
+        KilledTerminationStatus, OsProcessArgs, Process, ProcessController,
+        ProcessKillAndWaitError, ProcessRunError, SendingCancellationSignalToProcessError, Status,
+        TerminationStatus, TerminationWithErrorStatus,
+    },
+    util::{remove_dir_all_with_max_attempts_and_delay, MaxAttemptsExceeded},
 };
 use std::{
     io::Error as IoError,
@@ -769,32 +772,6 @@ struct IoForwardArgs {
     stderr_file: File,
     stdout_name: &'static str,
     stderr_name: &'static str,
-}
-
-#[derive(ThisError, Debug)]
-#[error("Max attempts exceeded")]
-pub struct MaxAttemptsExceeded(Vec<IoError>);
-
-async fn remove_dir_all_with_max_attempts_and_delay(
-    max_attempts: u16,
-    delay: Duration,
-    path: &Path,
-) -> Result<Vec<IoError>, MaxAttemptsExceeded> {
-    let mut errors = Vec::new();
-
-    for _ in 0..max_attempts {
-        tracing::debug!(?path, "Attempting to delete dir");
-        match fs::remove_dir_all(path).await {
-            Ok(_) => return Ok(errors),
-            Err(err) => {
-                tracing::error!(%err, ?path, "Failed to delete dir");
-                errors.push(err);
-                tokio::time::sleep(delay).await;
-            }
-        }
-    }
-
-    Err(MaxAttemptsExceeded(errors))
 }
 
 #[cfg(test)]
