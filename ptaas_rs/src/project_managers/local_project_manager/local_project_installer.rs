@@ -1,5 +1,5 @@
 use crate::{
-    project_managers::process_2::{
+    project_managers::process::{
         KilledTerminationStatus, OsProcessArgs, Process, ProcessController,
         ProcessKillAndWaitError, ProcessRunError, SendingCancellationSignalToProcessError, Status,
         TerminationStatus, TerminationWithErrorStatus,
