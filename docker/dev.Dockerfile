@@ -12,5 +12,5 @@ WORKDIR /app
 
 CMD ["/bin/bash"]
 
-# docker build -t ptaas_dev -f dev.Dockerfile .
+# docker build -t ptaas_dev -f docker/dev.Dockerfile .
 # docker run -it --rm -v ${pwd}:/app ptaas_dev
