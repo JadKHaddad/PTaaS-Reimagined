@@ -18,6 +18,10 @@ use tokio::{
     sync::mpsc,
 };
 
+/// Responsible for cancelling a local project installation.
+/// Correctness: The virtual environment process is cancelled, if it is running, and the `cancel` method returns.
+/// The requirements process is cancelled, if it is running and the virtual environment process has already terminated,
+/// and the `cancel` method returns with the corresponding cancellation result.
 pub struct LocalProjectInstallerController {
     venv_controller: ProcessController,
     req_controller: ProcessController,
@@ -113,6 +117,12 @@ macro_rules! generate_process_run_result {
     };
 }
 
+/// Responsible for installing a project locally.
+/// Creates a virtual environment and installs the project's requirements in it.
+/// Correctness: The virtual environment is created, if the project is valid.
+/// The requirements are installed, if the virtual environment is created.
+/// The requirements process will only be started, if the virtual environment process has terminated successfully.
+/// On installation failures, the virtual environment is deleted.
 pub struct LocalProjectInstaller {
     id: String,
     uploaded_project_dir: PathBuf,
