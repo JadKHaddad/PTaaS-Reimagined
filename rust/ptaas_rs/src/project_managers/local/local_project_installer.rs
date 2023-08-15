@@ -19,9 +19,9 @@ use tokio::{
 };
 
 /// Responsible for cancelling a local project installation.
-/// Correctness: The virtual environment process is cancelled, if it is running, and the `cancel` method returns.
+/// Correctness: The virtual environment process is cancelled, if it is running, and the ```cancel``` method returns.
 /// The requirements process is cancelled, if it is running and the virtual environment process has already terminated,
-/// and the `cancel` method returns with the corresponding cancellation result.
+/// and the ```cancel``` method returns with the corresponding cancellation result.
 pub struct LocalProjectInstallerController {
     venv_controller: ProcessController,
     req_controller: ProcessController,
@@ -472,8 +472,8 @@ impl LocalProjectInstaller {
         Ok(())
     }
 
-    /// If an error occurs during the clean up, a `CleanUpError` is returned.
-    /// If no error occurs during the clean up, the given error mapped to a `InstallError` is returned.
+    /// If an error occurs during the clean up, a ```CleanUpError``` is returned.
+    /// If no error occurs during the clean up, the given error mapped to a ```InstallError``` is returned.
     async fn clean_up_on_error_and_return_error(
         &mut self,
         error: ErrorThatTriggersCleanUp,
