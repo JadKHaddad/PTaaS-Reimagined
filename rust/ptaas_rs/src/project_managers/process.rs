@@ -38,14 +38,14 @@ pub enum KilledTerminationStatus {
 #[derive(Debug, Clone)]
 pub enum TerminationWithErrorStatus {
     /// On SIGTERM, the process will exit with UnknownErrorCode.
-    /// On windows, the process will exit with 1. This will be translated to `Killed` if `child_killed_successfuly` is true.
-    /// On linux, the process will exit with UnknownErrorCode. This will be translated to `Killed` if `child_killed_successfuly` is true.
+    /// On windows, the process will exit with 1. This will be translated to ```Killed``` if ```child_killed_successfuly``` is true.
+    /// On linux, the process will exit with UnknownErrorCode. This will be translated to ```Killed``` if ```child_killed_successfuly``` is true.
     /// Otherwise, it will not be translated.
     TerminatedWithUnknownErrorCode,
     TerminatedWithErrorCode(i32),
 }
 
-/// Used in `Process::run` to pass arguments, to improve readability.
+/// Used in ```Process::run``` to pass arguments, to improve readability.
 #[derive(Debug)]
 pub struct OsProcessArgs<I, S, P> {
     pub program: S,
@@ -55,7 +55,7 @@ pub struct OsProcessArgs<I, S, P> {
     pub stderr_sender: Option<mpsc::Sender<String>>,
 }
 
-/// Conveniently holding an `Arc<RwLock<Status>>` to hide **ugly** operations.
+/// Conveniently holding an ```Arc<RwLock<Status>>``` to hide **ugly** operations.
 #[derive(Clone)]
 struct StatusHolder {
     status: Arc<RwLock<Status>>,
@@ -134,18 +134,18 @@ impl ProcessController {
     }
 }
 
-/// Wrapper around `tokio::process::Child` abstracting away the **ugly** details.
+/// Wrapper around ```tokio::process::Child``` abstracting away the **ugly** details.
 pub struct Process {
     status_holder: StatusHolder,
     given_id: String,
     given_name: String,
     child_killed_successfuly: bool,
     controller_dropped: bool,
-    /// Option so we can take it. `None` if the process has not started yet.
+    /// Option so we can take it. ```None``` if the process has not started yet.
     child: Option<Child>,
-    /// Option so we can take it. `None` if the process has started. Receives the cancellation signal from the controller.
+    /// Option so we can take it. ```None``` if the process has started. Receives the cancellation signal from the controller.
     cancel_status_channel_sender: Option<oneshot::Sender<Option<ProcessKillAndWaitError>>>,
-    /// Option so we can take it. `None` if the process has started. Sends the cancellation result to the controller.
+    /// Option so we can take it. ```None``` if the process has started. Sends the cancellation result to the controller.
     cancel_channel_receiver: Option<oneshot::Receiver<()>>,
 }
 
@@ -488,7 +488,7 @@ impl Process {
     }
 }
 
-/// Getting a `ChildNotSet` error, which is extremely weird, requires you to drop the process in order to kill and wait for the child.
+/// Getting a ```ChildNotSet``` error, which is extremely weird, requires you to drop the process in order to kill and wait for the child.
 /// Long story short: this is a bug in the code. investigate it.
 #[derive(ThisError, Debug)]
 #[error("Some one should have set the child :D")]
